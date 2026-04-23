@@ -399,6 +399,42 @@ async function listAccessibleRootIds(accessibleOrgIds = [], client = db) {
   return result.rows.map((row) => row.id);
 }
 
+async function existsByCode(code, client = db) {
+  const result = await client.query(
+    `SELECT 1
+     FROM doffice_organizations
+     WHERE code = $1
+     LIMIT 1`,
+    [code]
+  );
+
+  return Boolean(result.rows[0]);
+}
+
+async function getSubtreeOrganizations(rootOrgId, client = db) {
+  const result = await client.query(
+    `WITH RECURSIVE org_tree AS (
+      SELECT id, name, code, type, status, logo, parent_id, depth, metadata, created_at
+      FROM doffice_organizations
+      WHERE id = $1
+        AND deleted_at IS NULL
+
+      UNION ALL
+
+      SELECT child.id, child.name, child.code, child.type, child.status, child.logo, child.parent_id, child.depth, child.metadata, child.created_at
+      FROM doffice_organizations child
+      INNER JOIN org_tree parent ON child.parent_id = parent.id
+      WHERE child.deleted_at IS NULL
+    )
+    SELECT id, name, code, type, status, logo, parent_id, depth, metadata
+    FROM org_tree
+    ORDER BY depth ASC, created_at ASC`,
+    [rootOrgId]
+  );
+
+  return result.rows;
+}
+
 module.exports = {
   getDescendantOrgIds,
   listOrganizations,
@@ -411,4 +447,6 @@ module.exports = {
   countActiveDescendants,
   getTreeNodes,
   listAccessibleRootIds,
+  existsByCode,
+  getSubtreeOrganizations,
 };

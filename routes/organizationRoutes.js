@@ -3,6 +3,8 @@ const express = require("express");
 const organizationController = require("../controllers/organizationController");
 const { requireAuth } = require("../middleware/authMiddleware");
 const {
+  validateListOrganizationsQuery,
+  validateOrganizationTreeQuery,
   validateCreateOrganizationPayload,
   validateUpdateOrganizationPayload,
   validateMoveOrganizationPayload,
@@ -12,8 +14,8 @@ const {
 
 const router = express.Router();
 
-router.get("/organizations", requireAuth, organizationController.listOrganizations);
-router.get("/organizations/tree", requireAuth, organizationController.getOrganizationTree);
+router.get("/organizations", requireAuth, validateListOrganizationsQuery, organizationController.listOrganizations);
+router.get("/organizations/tree", requireAuth, validateOrganizationTreeQuery, organizationController.getOrganizationTree);
 router.get("/organizations/:orgId", requireAuth, organizationController.getOrganization);
 
 router.post(

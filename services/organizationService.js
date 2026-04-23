@@ -5,12 +5,59 @@ const { generateId } = require("../utils/id");
 
 const VALID_STATUSES = new Set(["active", "archived", "deactivated"]);
 
-function parsePositiveInt(value, fallback) {
-  const parsed = Number.parseInt(value, 10);
-  if (Number.isNaN(parsed) || parsed < 0) {
+function parseNonNegativeInt(value, fallback, fieldName) {
+  if (value === undefined || value === null || value === "") {
     return fallback;
   }
+
+  if (typeof value !== "string" && typeof value !== "number") {
+    const error = new Error(`Invalid query parameter: ${fieldName} must be a non-negative integer.`);
+    error.status = 400;
+    throw error;
+  }
+
+  const normalized = String(value).trim();
+  if (!/^\d+$/.test(normalized)) {
+    const error = new Error(`Invalid query parameter: ${fieldName} must be a non-negative integer.`);
+    error.status = 400;
+    throw error;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    const error = new Error(`Invalid query parameter: ${fieldName} must be a non-negative integer.`);
+    error.status = 400;
+    throw error;
+  }
+
   return parsed;
+}
+
+function truncateText(value, maxLength) {
+  if (!value) {
+    return value;
+  }
+
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return value.slice(0, maxLength);
+}
+
+function normalizeCodeForClone(value) {
+  if (!value) {
+    return "ORG";
+  }
+
+  const normalized = String(value)
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-|-$/g, "");
+
+  return normalized || "ORG";
 }
 
 function toOrganizationResponse(row) {
@@ -99,8 +146,8 @@ async function listOrganizations(authUser, query) {
     assert(VALID_STATUSES.has(status), "Invalid status filter.", 400);
   }
 
-  const limit = parsePositiveInt(query.limit, 20);
-  const offset = parsePositiveInt(query.offset, 0);
+  const limit = parseNonNegativeInt(query.limit, 20, "limit");
+  const offset = parseNonNegativeInt(query.offset, 0, "offset");
 
   const filters = {
     search: query.search || null,
@@ -237,6 +284,9 @@ async function createOrganization(authUser, payload) {
   const parentId = organization.parentId || null;
   let depth = 0;
 
+  const codeExists = await organizationModel.existsByCode(organization.code);
+  assert(!codeExists, "Organization code already exists.", 409);
+
   if (parentId) {
     const parent = await getOrganizationOrThrow(parentId);
     depth = Number(parent.depth) + 1;
@@ -271,6 +321,9 @@ async function createSubOrganization(authUser, orgId, payload) {
   assertOrgAccess(parent.id, accessContext);
 
   const organization = payload.organization;
+  const codeExists = await organizationModel.existsByCode(organization.code);
+  assert(!codeExists, "Organization code already exists.", 409);
+
   const childId = generateId("org");
 
   await organizationModel.createOrganization({
@@ -296,7 +349,7 @@ async function updateOrganization(authUser, orgId, payload) {
   const accessContext = await getAccessContext(authUser);
   assert(accessContext.isOrgAdmin, "Only organization admin or super admin can update organizations.", 403);
 
-  await getOrganizationOrThrow(orgId);
+  const current = await getOrganizationOrThrow(orgId);
   assertOrgAccess(orgId, accessContext);
 
   const organization = payload.organization;
@@ -307,6 +360,12 @@ async function updateOrganization(authUser, orgId, payload) {
   }
 
   if (Object.prototype.hasOwnProperty.call(organization, "code")) {
+    const nextCode = organization.code;
+    if (nextCode !== current.code) {
+      const codeExists = await organizationModel.existsByCode(nextCode);
+      assert(!codeExists, "Organization code already exists.", 409);
+    }
+
     updates.code = organization.code;
   }
 
@@ -432,42 +491,97 @@ async function mergeOrganizations(authUser, payload) {
 }
 
 async function cloneOrganization(authUser, orgId, payload) {
-  const accessContext = await getAccessContext(authUser);
-  assert(accessContext.isOrgAdmin || accessContext.isSuperAdmin, "Only organization admin or super admin can clone organizations.", 403);
+  const client = await db.pool.connect();
 
-  const source = await getOrganizationOrThrow(orgId);
+  try {
+    await client.query("BEGIN");
 
-  if (!accessContext.isSuperAdmin) {
-    assertOrgAccess(source.id, accessContext);
+    const accessContext = await getAccessContext(authUser, client);
+    assert(accessContext.isOrgAdmin || accessContext.isSuperAdmin, "Only organization admin or super admin can clone organizations.", 403);
+
+    const source = await getOrganizationOrThrow(orgId, client);
+
+    if (!accessContext.isSuperAdmin) {
+      assertOrgAccess(source.id, accessContext);
+    }
+
+    const rootCodeExists = await organizationModel.existsByCode(payload.newCode, client);
+    assert(!rootCodeExists, "Organization code already exists.", 409);
+
+    const subtree = await organizationModel.getSubtreeOrganizations(source.id, client);
+    assert(subtree.length > 0, "Organization not found.", 404);
+
+    const generatedCodes = new Set([payload.newCode]);
+
+    const allocateChildCode = async (sourceNodeCode) => {
+      const basePrefix = normalizeCodeForClone(payload.newCode);
+      const childSuffix = normalizeCodeForClone(sourceNodeCode);
+      const base = truncateText(`${basePrefix}-${childSuffix}`, 100);
+
+      let candidate = base;
+      let sequence = 2;
+
+      while (generatedCodes.has(candidate) || (await organizationModel.existsByCode(candidate, client))) {
+        const numberedBase = truncateText(base, 96);
+        candidate = truncateText(`${numberedBase}-${sequence}`, 100);
+        sequence += 1;
+      }
+
+      generatedCodes.add(candidate);
+      return candidate;
+    };
+
+    const oldToNewOrgId = new Map();
+    const rootCloneId = generateId("org");
+
+    for (const node of subtree) {
+      const isRootNode = node.id === source.id;
+      const parentId = isRootNode ? source.parent_id : oldToNewOrgId.get(node.parent_id);
+      const newOrgId = isRootNode ? rootCloneId : generateId("org");
+      const newCode = isRootNode ? payload.newCode : await allocateChildCode(node.code);
+      const metadata = {
+        ...(node.metadata || {}),
+        clonedFromOrgId: node.id,
+      };
+
+      if (isRootNode) {
+        metadata.cloneOptions = {
+          includeRoles: Boolean(payload.includeRoles),
+          includeNavConfig: Boolean(payload.includeNavConfig),
+          includeUsers: Boolean(payload.includeUsers),
+        };
+      }
+
+      oldToNewOrgId.set(node.id, newOrgId);
+
+      await organizationModel.createOrganization(
+        {
+          id: newOrgId,
+          name: isRootNode ? payload.newName : node.name,
+          code: newCode,
+          type: node.type,
+          logo: node.logo,
+          status: "active",
+          parentId,
+          depth: node.depth,
+          metadata,
+        },
+        client
+      );
+    }
+
+    await client.query("COMMIT");
+
+    const created = await organizationModel.findById(rootCloneId);
+    return {
+      organization: toOrganizationResponse(created),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
-
-  const cloneId = generateId("org");
-
-  await organizationModel.createOrganization({
-    id: cloneId,
-    name: payload.newName,
-    code: payload.newCode,
-    type: source.type,
-    logo: source.logo,
-    status: "active",
-    parentId: source.parent_id,
-    depth: source.depth,
-    metadata: {
-      ...(source.metadata || {}),
-      cloneOptions: {
-        includeRoles: Boolean(payload.includeRoles),
-        includeNavConfig: Boolean(payload.includeNavConfig),
-        includeUsers: Boolean(payload.includeUsers),
-      },
-      clonedFromOrgId: source.id,
-    },
-  });
-
-  const created = await organizationModel.findById(cloneId);
-
-  return {
-    organization: toOrganizationResponse(created),
-  };
 }
 
 async function archiveOrganization(authUser, orgId) {
