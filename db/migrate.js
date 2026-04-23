@@ -23,10 +23,57 @@ async function runMigrations() {
         code VARCHAR(100) UNIQUE NOT NULL,
         parent_id VARCHAR(64) REFERENCES doffice_organizations(id) ON DELETE SET NULL,
         status VARCHAR(32) NOT NULL DEFAULT 'active',
+        type VARCHAR(64) NOT NULL DEFAULT 'root',
+        logo TEXT,
+        depth INTEGER NOT NULL DEFAULT 0,
         metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        deleted_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_organizations
+      ADD COLUMN IF NOT EXISTS type VARCHAR(64) NOT NULL DEFAULT 'root';
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_organizations
+      ADD COLUMN IF NOT EXISTS logo TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_organizations
+      ADD COLUMN IF NOT EXISTS depth INTEGER NOT NULL DEFAULT 0;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_organizations
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_organizations_status_check'
+        ) THEN
+          ALTER TABLE doffice_organizations
+          ADD CONSTRAINT doffice_organizations_status_check
+          CHECK (status IN ('active', 'archived', 'deactivated'));
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_orgs_parent_id ON doffice_organizations(parent_id);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_orgs_status ON doffice_organizations(status);
     `);
 
     await client.query(`
@@ -49,6 +96,10 @@ async function runMigrations() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_users_org_id ON doffice_users(org_id);
     `);
 
     await client.query(`
@@ -99,6 +150,13 @@ async function runMigrations() {
        VALUES ($1, $2, $3)
        ON CONFLICT (name) DO NOTHING`,
       ["role_org_user", "Organization User", "Default organization user role"]
+    );
+
+    await client.query(
+      `INSERT INTO doffice_roles (id, name, description)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (name) DO NOTHING`,
+      ["role_org_admin", "Organization Admin", "Organization administrator role"]
     );
 
     await client.query("COMMIT");
