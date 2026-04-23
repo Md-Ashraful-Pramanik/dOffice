@@ -74,6 +74,19 @@ async function runMigrations() {
       );
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_audits (
+        id BIGSERIAL PRIMARY KEY,
+        user_id VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        action VARCHAR(255) NOT NULL,
+        method VARCHAR(16) NOT NULL,
+        endpoint TEXT NOT NULL,
+        status_code INTEGER NOT NULL,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
     await client.query(
       `INSERT INTO doffice_roles (id, name, description)
        VALUES ($1, $2, $3)
