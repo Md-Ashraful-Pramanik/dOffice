@@ -23,30 +23,39 @@ function extractToken(authorizationHeader) {
 }
 
 async function requireAuth(req, res, next) {
+  const unauthorized = (message) => {
+    return res.status(401).json({
+      error: {
+        status: 401,
+        message,
+      },
+    });
+  };
+
   try {
     const token = extractToken(req.headers.authorization);
     if (!token) {
-      return res.status(401).json({ error: "Authentication required." });
+      return unauthorized("Missing or invalid authentication token.");
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET || "dev_secret");
     if (!decoded?.sub || !decoded?.sid) {
-      return res.status(401).json({ error: "Invalid token payload." });
+      return unauthorized("Missing or invalid authentication token.");
     }
 
     const session = await sessionModel.findActiveSessionById(decoded.sid);
     if (!session) {
-      return res.status(401).json({ error: "Session is invalid or expired." });
+      return unauthorized("Missing or invalid authentication token.");
     }
 
     const tokenHash = sha256(token);
     if (session.access_token_hash !== tokenHash) {
-      return res.status(401).json({ error: "Token does not match active session." });
+      return unauthorized("Missing or invalid authentication token.");
     }
 
     const user = await userModel.findById(decoded.sub);
     if (!user) {
-      return res.status(401).json({ error: "User not found." });
+      return unauthorized("Missing or invalid authentication token.");
     }
 
     req.auth = {
@@ -55,9 +64,14 @@ async function requireAuth(req, res, next) {
       user,
     };
 
+    await Promise.all([
+      sessionModel.touchSessionActivity(session.id),
+      userModel.touchUserLastSeen(user.id),
+    ]);
+
     next();
   } catch (error) {
-    return res.status(401).json({ error: "Authentication failed." });
+    return unauthorized("Missing or invalid authentication token.");
   }
 }
 

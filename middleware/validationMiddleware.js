@@ -240,6 +240,114 @@ function validateCreateRelationshipPayload(req, res, next) {
   next();
 }
 
+function validateUpdateCurrentUserPayload(req, res, next) {
+  const user = req.body && req.body.user;
+  if (!isPlainObject(user)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  const allowedFields = ["password", "avatar", "bio", "designation", "contactInfo"];
+  const fields = Object.keys(user);
+  if (!fields.length) {
+    return res.status(422).json({ errors: { body: ["must contain at least one updatable field"] } });
+  }
+
+  if (!fields.every((field) => allowedFields.includes(field))) {
+    return res.status(422).json({ errors: { body: ["contains unsupported fields"] } });
+  }
+
+  if (user.contactInfo !== undefined && !isPlainObject(user.contactInfo)) {
+    return res.status(422).json({ errors: { contactInfo: ["must be an object"] } });
+  }
+
+  next();
+}
+
+function validateCreateOrganizationUserPayload(req, res, next) {
+  const user = req.body && req.body.user;
+  if (!isPlainObject(user)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  if (!isNonEmptyString(user.username) || !isNonEmptyString(user.email) || !isNonEmptyString(user.password) || !isNonEmptyString(user.name)) {
+    return res.status(422).json({ errors: { body: ["required fields: username, email, password, name"] } });
+  }
+
+  if (user.roleIds !== undefined && (!Array.isArray(user.roleIds) || !user.roleIds.every((roleId) => isNonEmptyString(roleId)))) {
+    return res.status(422).json({ errors: { roleIds: ["must be an array of non-empty strings"] } });
+  }
+
+  if (user.contactInfo !== undefined && !isPlainObject(user.contactInfo)) {
+    return res.status(422).json({ errors: { contactInfo: ["must be an object"] } });
+  }
+
+  next();
+}
+
+function validateUpdateOrganizationUserPayload(req, res, next) {
+  const user = req.body && req.body.user;
+  if (!isPlainObject(user)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  const allowedFields = ["name", "designation", "department", "status", "roleIds", "contactInfo", "avatar", "bio", "location", "skills", "managerId"];
+  const fields = Object.keys(user);
+  if (!fields.length) {
+    return res.status(422).json({ errors: { body: ["must contain at least one updatable field"] } });
+  }
+
+  if (!fields.every((field) => allowedFields.includes(field))) {
+    return res.status(422).json({ errors: { body: ["contains unsupported fields"] } });
+  }
+
+  if (user.roleIds !== undefined && (!Array.isArray(user.roleIds) || !user.roleIds.every((roleId) => isNonEmptyString(roleId)))) {
+    return res.status(422).json({ errors: { roleIds: ["must be an array of non-empty strings"] } });
+  }
+
+  if (user.skills !== undefined && (!Array.isArray(user.skills) || !user.skills.every((skill) => isNonEmptyString(skill)))) {
+    return res.status(422).json({ errors: { skills: ["must be an array of non-empty strings"] } });
+  }
+
+  if (user.contactInfo !== undefined && !isPlainObject(user.contactInfo)) {
+    return res.status(422).json({ errors: { contactInfo: ["must be an object"] } });
+  }
+
+  next();
+}
+
+function validateListUsersQuery(req, res, next) {
+  const validStatuses = new Set(["active", "suspended", "on-leave", "deactivated", "retired"]);
+  const { status, limit, offset } = req.query || {};
+
+  if (status !== undefined && !validStatuses.has(status)) {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: status." } });
+  }
+
+  if (limit !== undefined && parseNonNegativeInteger(limit) === null) {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: limit." } });
+  }
+
+  if (offset !== undefined && parseNonNegativeInteger(offset) === null) {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: offset." } });
+  }
+
+  next();
+}
+
+function validateDirectoryQuery(req, res, next) {
+  const { limit, offset } = req.query || {};
+
+  if (limit !== undefined && parseNonNegativeInteger(limit) === null) {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: limit." } });
+  }
+
+  if (offset !== undefined && parseNonNegativeInteger(offset) === null) {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: offset." } });
+  }
+
+  next();
+}
+
 module.exports = {
   validateRegisterPayload,
   validateLoginPayload,
@@ -251,4 +359,9 @@ module.exports = {
   validateMergeOrganizationsPayload,
   validateCloneOrganizationPayload,
   validateCreateRelationshipPayload,
+  validateUpdateCurrentUserPayload,
+  validateCreateOrganizationUserPayload,
+  validateUpdateOrganizationUserPayload,
+  validateListUsersQuery,
+  validateDirectoryQuery,
 };

@@ -93,9 +93,66 @@ async function runMigrations() {
         contact_address TEXT,
         org_id VARCHAR(64) REFERENCES doffice_organizations(id) ON DELETE SET NULL,
         is_super_admin BOOLEAN NOT NULL DEFAULT FALSE,
+        manager_id VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        location VARCHAR(255),
+        skills TEXT[] NOT NULL DEFAULT ARRAY[]::text[],
+        last_seen_at TIMESTAMPTZ,
+        deleted_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_users
+      ADD COLUMN IF NOT EXISTS manager_id VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_users
+      ADD COLUMN IF NOT EXISTS location VARCHAR(255);
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_users
+      ADD COLUMN IF NOT EXISTS skills TEXT[] NOT NULL DEFAULT ARRAY[]::text[];
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_users
+      ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_users
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_users_status_check'
+        ) THEN
+          ALTER TABLE doffice_users
+          ADD CONSTRAINT doffice_users_status_check
+          CHECK (status IN ('active', 'suspended', 'on-leave', 'deactivated', 'retired'));
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_users_status ON doffice_users(status);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_users_manager_id ON doffice_users(manager_id);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_users_deleted_at ON doffice_users(deleted_at);
     `);
 
     await client.query(`
@@ -117,12 +174,47 @@ async function runMigrations() {
         user_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
         access_token_hash TEXT NOT NULL,
         refresh_token_hash TEXT NOT NULL,
+        device_type VARCHAR(32),
+        browser VARCHAR(120),
+        os VARCHAR(120),
+        ip VARCHAR(64),
+        last_active_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         is_revoked BOOLEAN NOT NULL DEFAULT FALSE,
         revoked_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         expires_at TIMESTAMPTZ NOT NULL
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_user_sessions
+      ADD COLUMN IF NOT EXISTS device_type VARCHAR(32);
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_user_sessions
+      ADD COLUMN IF NOT EXISTS browser VARCHAR(120);
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_user_sessions
+      ADD COLUMN IF NOT EXISTS os VARCHAR(120);
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_user_sessions
+      ADD COLUMN IF NOT EXISTS ip VARCHAR(64);
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_user_sessions
+      ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_user_sessions_user_active
+      ON doffice_user_sessions(user_id, is_revoked, expires_at);
     `);
 
     await client.query(`
