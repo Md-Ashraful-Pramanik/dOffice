@@ -138,6 +138,41 @@ async function runMigrations() {
       );
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_org_relationships (
+        id VARCHAR(64) PRIMARY KEY,
+        source_org_id VARCHAR(64) NOT NULL REFERENCES doffice_organizations(id) ON DELETE CASCADE,
+        target_org_id VARCHAR(64) NOT NULL REFERENCES doffice_organizations(id) ON DELETE CASCADE,
+        type VARCHAR(64) NOT NULL,
+        description TEXT,
+        shared_modules TEXT[] NOT NULL DEFAULT ARRAY[]::text[],
+        created_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        deleted_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT doffice_org_relationships_source_target_check CHECK (source_org_id <> target_org_id)
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_org_relationships_source_org_id
+      ON doffice_org_relationships(source_org_id)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_org_relationships_target_org_id
+      ON doffice_org_relationships(target_org_id)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_doffice_org_relationships_active
+      ON doffice_org_relationships(source_org_id, target_org_id, type)
+      WHERE deleted_at IS NULL;
+    `);
+
     await client.query(
       `INSERT INTO doffice_roles (id, name, description)
        VALUES ($1, $2, $3)

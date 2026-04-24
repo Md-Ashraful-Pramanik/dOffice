@@ -214,6 +214,32 @@ function validateCloneOrganizationPayload(req, res, next) {
   next();
 }
 
+function validateCreateRelationshipPayload(req, res, next) {
+  const relationship = req.body && req.body.relationship;
+
+  if (!isPlainObject(relationship)) {
+    return res.status(400).json({ error: "Invalid request body. Expected relationship object." });
+  }
+
+  const { targetOrgId, type, description, sharedModules } = relationship;
+
+  if (!isNonEmptyString(targetOrgId) || !isNonEmptyString(type)) {
+    return res.status(400).json({ error: "Required fields: targetOrgId, type." });
+  }
+
+  if (description !== undefined && description !== null && typeof description !== "string") {
+    return res.status(400).json({ error: "Invalid field: description must be a string or null." });
+  }
+
+  if (sharedModules !== undefined) {
+    if (!Array.isArray(sharedModules) || !sharedModules.every((item) => isNonEmptyString(item))) {
+      return res.status(400).json({ error: "Invalid field: sharedModules must be an array of non-empty strings." });
+    }
+  }
+
+  next();
+}
+
 module.exports = {
   validateRegisterPayload,
   validateLoginPayload,
@@ -224,4 +250,5 @@ module.exports = {
   validateMoveOrganizationPayload,
   validateMergeOrganizationsPayload,
   validateCloneOrganizationPayload,
+  validateCreateRelationshipPayload,
 };

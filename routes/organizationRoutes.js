@@ -1,6 +1,7 @@
 const express = require("express");
 
 const organizationController = require("../controllers/organizationController");
+const relationshipController = require("../controllers/organizationRelationshipController");
 const { requireAuth } = require("../middleware/authMiddleware");
 const {
   validateListOrganizationsQuery,
@@ -10,6 +11,7 @@ const {
   validateMoveOrganizationPayload,
   validateMergeOrganizationsPayload,
   validateCloneOrganizationPayload,
+  validateCreateRelationshipPayload,
 } = require("../middleware/validationMiddleware");
 
 const router = express.Router();
@@ -63,5 +65,24 @@ router.post(
 router.post("/organizations/:orgId/archive", requireAuth, organizationController.archiveOrganization);
 router.post("/organizations/:orgId/restore", requireAuth, organizationController.restoreOrganization);
 router.delete("/organizations/:orgId", requireAuth, organizationController.deleteOrganization);
+
+router.get(
+  "/organizations/:orgId/relationships",
+  requireAuth,
+  relationshipController.listRelationships
+);
+
+router.post(
+  "/organizations/:orgId/relationships",
+  requireAuth,
+  validateCreateRelationshipPayload,
+  relationshipController.createRelationship
+);
+
+router.delete(
+  "/organizations/:orgId/relationships/:relationshipId",
+  requireAuth,
+  relationshipController.deleteRelationship
+);
 
 module.exports = router;
