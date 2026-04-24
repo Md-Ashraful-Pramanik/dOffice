@@ -144,6 +144,22 @@ async function runMigrations() {
     `);
 
     await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_users_email_format_check'
+        ) THEN
+          ALTER TABLE doffice_users
+          ADD CONSTRAINT doffice_users_email_format_check
+          CHECK (email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$')
+          NOT VALID;
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_doffice_users_status ON doffice_users(status);
     `);
 

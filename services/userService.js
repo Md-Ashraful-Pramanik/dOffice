@@ -7,6 +7,7 @@ const organizationModel = require("../models/organizationModel");
 const { generateId } = require("../utils/id");
 
 const USER_STATUSES = new Set(["active", "suspended", "on-leave", "deactivated", "retired"]);
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function assert(condition, message, status = 400) {
   if (!condition) {
@@ -42,6 +43,16 @@ function parseNonNegativeInt(value, fallback, fieldName) {
   }
 
   return parsed;
+}
+
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function assertValidEmail(email) {
+  assert(isNonEmptyString(email), "Email is required.", 422);
+  const normalized = email.trim();
+  assert(normalized.length <= 254 && EMAIL_REGEX.test(normalized), "Email is invalid.", 422);
 }
 
 async function getAccessContext(authUser, client = db) {
@@ -93,6 +104,8 @@ function toUserResponse(user, roleIds = []) {
       },
       orgId: user.org_id,
       roleIds,
+      token: null,
+      refreshToken: null,
       createdAt: user.created_at,
       updatedAt: user.updated_at,
     },
@@ -295,8 +308,29 @@ async function createUserInOrganization(authUser, orgId, payload) {
     assert(organization, "Resource not found.", 404);
 
     const userPayload = payload.user || {};
+    const allowedFields = new Set([
+      "username",
+      "email",
+      "password",
+      "name",
+      "employeeId",
+      "designation",
+      "department",
+      "roleIds",
+      "contactInfo",
+      "avatar",
+      "bio",
+    ]);
+    const payloadFields = Object.keys(userPayload);
+    assert(payloadFields.every((field) => allowedFields.has(field)), "One or more fields are not allowed for this endpoint.", 422);
+
     const { username, email, password, name } = userPayload;
-    assert(username && email && password && name, "Required fields: username, email, password, name.", 422);
+    assert(
+      isNonEmptyString(username) && isNonEmptyString(email) && isNonEmptyString(password) && isNonEmptyString(name),
+      "Required fields: username, email, password, name.",
+      422
+    );
+    assertValidEmail(email);
 
     const existing = await userModel.findByEmail(email, client);
     assert(!existing, "Email is already in use.", 409);
@@ -319,9 +353,6 @@ async function createUserInOrganization(authUser, orgId, payload) {
         contactAddress: userPayload.contactInfo?.address,
         orgId,
         isSuperAdmin: false,
-        managerId: userPayload.managerId,
-        location: userPayload.location,
-        skills: Array.isArray(userPayload.skills) ? userPayload.skills : [],
       },
       client
     );
@@ -356,7 +387,7 @@ async function updateUserByAdmin(authUser, userId, payload) {
     assertOrgAccess(targetUser.org_id, accessContext);
 
     const userPayload = payload.user || {};
-    const accepted = ["name", "designation", "department", "status", "roleIds", "contactInfo", "avatar", "bio", "location", "skills", "managerId"];
+    const accepted = ["name", "designation", "department", "status", "roleIds", "contactInfo", "avatar", "bio"];
     const provided = Object.keys(userPayload);
     assert(provided.length > 0, "At least one updatable field is required.", 422);
     assert(provided.every((field) => accepted.includes(field)), "One or more fields are not allowed for this endpoint.", 422);
@@ -372,9 +403,6 @@ async function updateUserByAdmin(authUser, userId, payload) {
     if (Object.prototype.hasOwnProperty.call(userPayload, "status")) updates.status = userPayload.status;
     if (Object.prototype.hasOwnProperty.call(userPayload, "avatar")) updates.avatar = userPayload.avatar;
     if (Object.prototype.hasOwnProperty.call(userPayload, "bio")) updates.bio = userPayload.bio;
-    if (Object.prototype.hasOwnProperty.call(userPayload, "location")) updates.location = userPayload.location;
-    if (Object.prototype.hasOwnProperty.call(userPayload, "managerId")) updates.managerId = userPayload.managerId;
-    if (Object.prototype.hasOwnProperty.call(userPayload, "skills")) updates.skills = userPayload.skills;
 
     if (Object.prototype.hasOwnProperty.call(userPayload, "contactInfo")) {
       updates.contactPhone = Object.prototype.hasOwnProperty.call(userPayload.contactInfo || {}, "phone")

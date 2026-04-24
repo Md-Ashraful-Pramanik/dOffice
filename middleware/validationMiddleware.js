@@ -22,6 +22,23 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function isValidEmail(value) {
+  if (!isNonEmptyString(value)) {
+    return false;
+  }
+
+  const normalized = value.trim();
+  if (normalized.length > 254) {
+    return false;
+  }
+
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized);
+}
+
+function isNullableString(value) {
+  return value === null || value === undefined || typeof value === "string";
+}
+
 function parseNonNegativeInteger(value) {
   if (value === undefined || value === null || value === "") {
     return null;
@@ -269,8 +286,31 @@ function validateCreateOrganizationUserPayload(req, res, next) {
     return res.status(422).json({ errors: { body: ["can't be blank"] } });
   }
 
+  const allowedFields = [
+    "username",
+    "email",
+    "password",
+    "name",
+    "employeeId",
+    "designation",
+    "department",
+    "roleIds",
+    "contactInfo",
+    "avatar",
+    "bio",
+  ];
+
+  const fields = Object.keys(user);
+  if (!fields.every((field) => allowedFields.includes(field))) {
+    return res.status(422).json({ errors: { body: ["contains unsupported fields"] } });
+  }
+
   if (!isNonEmptyString(user.username) || !isNonEmptyString(user.email) || !isNonEmptyString(user.password) || !isNonEmptyString(user.name)) {
     return res.status(422).json({ errors: { body: ["required fields: username, email, password, name"] } });
+  }
+
+  if (!isValidEmail(user.email)) {
+    return res.status(422).json({ errors: { email: ["is invalid"] } });
   }
 
   if (user.roleIds !== undefined && (!Array.isArray(user.roleIds) || !user.roleIds.every((roleId) => isNonEmptyString(roleId)))) {
@@ -279,6 +319,16 @@ function validateCreateOrganizationUserPayload(req, res, next) {
 
   if (user.contactInfo !== undefined && !isPlainObject(user.contactInfo)) {
     return res.status(422).json({ errors: { contactInfo: ["must be an object"] } });
+  }
+
+  if (isPlainObject(user.contactInfo)) {
+    if (Object.prototype.hasOwnProperty.call(user.contactInfo, "phone") && !isNullableString(user.contactInfo.phone)) {
+      return res.status(422).json({ errors: { contactInfo: ["phone must be a string or null"] } });
+    }
+
+    if (Object.prototype.hasOwnProperty.call(user.contactInfo, "address") && !isNullableString(user.contactInfo.address)) {
+      return res.status(422).json({ errors: { contactInfo: ["address must be a string or null"] } });
+    }
   }
 
   next();
@@ -290,7 +340,7 @@ function validateUpdateOrganizationUserPayload(req, res, next) {
     return res.status(422).json({ errors: { body: ["can't be blank"] } });
   }
 
-  const allowedFields = ["name", "designation", "department", "status", "roleIds", "contactInfo", "avatar", "bio", "location", "skills", "managerId"];
+  const allowedFields = ["name", "designation", "department", "status", "roleIds", "contactInfo", "avatar", "bio"];
   const fields = Object.keys(user);
   if (!fields.length) {
     return res.status(422).json({ errors: { body: ["must contain at least one updatable field"] } });
@@ -304,12 +354,25 @@ function validateUpdateOrganizationUserPayload(req, res, next) {
     return res.status(422).json({ errors: { roleIds: ["must be an array of non-empty strings"] } });
   }
 
-  if (user.skills !== undefined && (!Array.isArray(user.skills) || !user.skills.every((skill) => isNonEmptyString(skill)))) {
-    return res.status(422).json({ errors: { skills: ["must be an array of non-empty strings"] } });
+  if (user.status !== undefined) {
+    const validStatuses = new Set(["active", "suspended", "on-leave", "deactivated", "retired"]);
+    if (!validStatuses.has(user.status)) {
+      return res.status(422).json({ errors: { status: ["is invalid"] } });
+    }
   }
 
   if (user.contactInfo !== undefined && !isPlainObject(user.contactInfo)) {
     return res.status(422).json({ errors: { contactInfo: ["must be an object"] } });
+  }
+
+  if (isPlainObject(user.contactInfo)) {
+    if (Object.prototype.hasOwnProperty.call(user.contactInfo, "phone") && !isNullableString(user.contactInfo.phone)) {
+      return res.status(422).json({ errors: { contactInfo: ["phone must be a string or null"] } });
+    }
+
+    if (Object.prototype.hasOwnProperty.call(user.contactInfo, "address") && !isNullableString(user.contactInfo.address)) {
+      return res.status(422).json({ errors: { contactInfo: ["address must be a string or null"] } });
+    }
   }
 
   next();
@@ -317,10 +380,30 @@ function validateUpdateOrganizationUserPayload(req, res, next) {
 
 function validateListUsersQuery(req, res, next) {
   const validStatuses = new Set(["active", "suspended", "on-leave", "deactivated", "retired"]);
-  const { status, limit, offset } = req.query || {};
+  const { search, status, department, designation, location, roleId, limit, offset } = req.query || {};
+
+  if (search !== undefined && typeof search !== "string") {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: search." } });
+  }
 
   if (status !== undefined && !validStatuses.has(status)) {
     return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: status." } });
+  }
+
+  if (department !== undefined && typeof department !== "string") {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: department." } });
+  }
+
+  if (designation !== undefined && typeof designation !== "string") {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: designation." } });
+  }
+
+  if (location !== undefined && typeof location !== "string") {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: location." } });
+  }
+
+  if (roleId !== undefined && typeof roleId !== "string") {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: roleId." } });
   }
 
   if (limit !== undefined && parseNonNegativeInteger(limit) === null) {
@@ -335,7 +418,27 @@ function validateListUsersQuery(req, res, next) {
 }
 
 function validateDirectoryQuery(req, res, next) {
-  const { limit, offset } = req.query || {};
+  const { search, department, designation, location, skill, limit, offset } = req.query || {};
+
+  if (search !== undefined && typeof search !== "string") {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: search." } });
+  }
+
+  if (department !== undefined && typeof department !== "string") {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: department." } });
+  }
+
+  if (designation !== undefined && typeof designation !== "string") {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: designation." } });
+  }
+
+  if (location !== undefined && typeof location !== "string") {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: location." } });
+  }
+
+  if (skill !== undefined && typeof skill !== "string") {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: skill." } });
+  }
 
   if (limit !== undefined && parseNonNegativeInteger(limit) === null) {
     return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: limit." } });
