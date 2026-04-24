@@ -85,6 +85,12 @@ function assertOrgAccess(orgId, accessContext) {
   assert(accessContext.accessibleOrgIds.includes(orgId), "You do not have permission to perform this action.", 403);
 }
 
+async function assertOrganizationExists(orgId, client = db) {
+  const organization = await organizationModel.findById(orgId, {}, client);
+  assert(organization, "Resource not found.", 404);
+  return organization;
+}
+
 function toUserResponse(user, roleIds = []) {
   return {
     user: {
@@ -261,6 +267,7 @@ async function updateCurrentUser(authUser, payload) {
 async function listOrganizationUsers(authUser, orgId, query) {
   const accessContext = await getAccessContext(authUser);
   assertOrgAccess(orgId, accessContext);
+  await assertOrganizationExists(orgId);
 
   const status = query.status || null;
   if (status) {
@@ -394,6 +401,7 @@ async function updateUserByAdmin(authUser, userId, payload) {
 
     if (Object.prototype.hasOwnProperty.call(userPayload, "status")) {
       assert(USER_STATUSES.has(userPayload.status), "Invalid user status value.", 422);
+      assert(userPayload.status !== targetUser.status, "User already has the requested status.", 422);
     }
 
     const updates = {};
@@ -433,11 +441,27 @@ async function updateUserByAdmin(authUser, userId, payload) {
 }
 
 async function deactivateUser(authUser, userId) {
+  const targetUser = await userModel.findById(userId);
+  assert(targetUser, "Resource not found.", 404);
+
+  const accessContext = await getAccessContext(authUser);
+  assert(accessContext.isOrgAdmin, "You do not have permission to perform this action.", 403);
+  assertOrgAccess(targetUser.org_id, accessContext);
+  assert(targetUser.status !== "deactivated", "User is already deactivated.", 422);
+
   const response = await updateUserByAdmin(authUser, userId, { user: { status: "deactivated" } });
   return response;
 }
 
 async function reactivateUser(authUser, userId) {
+  const targetUser = await userModel.findById(userId);
+  assert(targetUser, "Resource not found.", 404);
+
+  const accessContext = await getAccessContext(authUser);
+  assert(accessContext.isOrgAdmin, "You do not have permission to perform this action.", 403);
+  assertOrgAccess(targetUser.org_id, accessContext);
+  assert(targetUser.status === "deactivated", "Only deactivated users can be reactivated.", 422);
+
   const response = await updateUserByAdmin(authUser, userId, { user: { status: "active" } });
   return response;
 }
@@ -451,7 +475,7 @@ async function deleteUser(authUser, userId) {
     const accessContext = await getAccessContext(authUser, client);
     assert(accessContext.isSuperAdmin, "You do not have permission to perform this action.", 403);
 
-    const targetUser = await userModel.findById(userId, client, { includeDeleted: true });
+    const targetUser = await userModel.findById(userId, client);
     assert(targetUser, "Resource not found.", 404);
 
     await userModel.updateUser(
@@ -477,6 +501,7 @@ async function deleteUser(authUser, userId) {
 async function getOrganizationDirectory(authUser, orgId, query) {
   const accessContext = await getAccessContext(authUser);
   assertOrgAccess(orgId, accessContext);
+  await assertOrganizationExists(orgId);
 
   const limit = parseNonNegativeInt(query.limit, 50, "limit");
   const offset = parseNonNegativeInt(query.offset, 0, "offset");
