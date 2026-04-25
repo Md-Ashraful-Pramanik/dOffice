@@ -66,7 +66,14 @@ async function createRole(payload, client = db) {
     `INSERT INTO doffice_roles (
       id, name, description, type, inherits_from, org_id, is_system, created_by
     ) VALUES (
-      $1, $2, $3, COALESCE($4, 'custom'), $5, $6, FALSE, $7
+      $1::varchar(64),
+      $2::varchar(100),
+      $3::text,
+      $4::varchar(16),
+      $5::varchar(64),
+      $6::varchar(64),
+      FALSE,
+      $7::varchar(64)
     )
     RETURNING id`,
     [id, name, description || null, type || "custom", inheritsFrom || null, orgId || null, createdBy || null]
@@ -194,7 +201,7 @@ async function replaceRolePermissions(roleId, permissions, client = db) {
     `UPDATE doffice_role_permissions
      SET deleted_at = NOW(),
          updated_at = NOW()
-     WHERE role_id = $1
+     WHERE role_id = $1::varchar(64)
        AND deleted_at IS NULL`,
     [roleId]
   );
@@ -208,7 +215,9 @@ async function replaceRolePermissions(roleId, permissions, client = db) {
 
   permissions.forEach((permission, index) => {
     const base = index * 3;
-    values.push(`($1, $${base + 2}, $${base + 3}, $${base + 4})`);
+    values.push(
+      `($1::varchar(64), $${base + 2}::varchar(100), $${base + 3}::varchar(100), $${base + 4}::boolean)`
+    );
     params.push(permission.module, permission.action, permission.allow);
   });
 
@@ -245,24 +254,24 @@ async function assignRoleToUser(userId, roleId, orgId, assignedBy, client = db) 
   await client.query(
     `UPDATE doffice_user_roles
      SET deleted_at = NULL,
-         org_id = $3,
-         assigned_by = $4,
+         org_id = $3::varchar(64),
+         assigned_by = $4::varchar(64),
          created_at = NOW()
-     WHERE user_id = $1
-       AND role_id = $2
-       AND COALESCE(org_id, '__global__') = COALESCE($3, '__global__')`,
+     WHERE user_id = $1::varchar(64)
+       AND role_id = $2::varchar(64)
+       AND COALESCE(org_id, '__global__'::varchar(64)) = COALESCE($3::varchar(64), '__global__'::varchar(64))`,
     [userId, roleId, orgId || null, assignedBy || null]
   );
 
   await client.query(
     `INSERT INTO doffice_user_roles (user_id, role_id, org_id, assigned_by)
-     SELECT $1, $2, $3, $4
+     SELECT $1::varchar(64), $2::varchar(64), $3::varchar(64), $4::varchar(64)
      WHERE NOT EXISTS (
       SELECT 1
       FROM doffice_user_roles
       WHERE user_id = $1
         AND role_id = $2
-        AND COALESCE(org_id, '__global__') = COALESCE($3, '__global__')
+        AND COALESCE(org_id, '__global__'::varchar(64)) = COALESCE($3::varchar(64), '__global__'::varchar(64))
         AND deleted_at IS NULL
      )`,
     [userId, roleId, orgId || null, assignedBy || null]
@@ -273,9 +282,9 @@ async function softRemoveRoleFromUser(userId, roleId, orgId = null, client = db)
   const result = await client.query(
     `UPDATE doffice_user_roles
      SET deleted_at = NOW()
-     WHERE user_id = $1
-       AND role_id = $2
-       AND COALESCE(org_id, '__global__') = COALESCE($3, '__global__')
+     WHERE user_id = $1::varchar(64)
+       AND role_id = $2::varchar(64)
+       AND COALESCE(org_id, '__global__'::varchar(64)) = COALESCE($3::varchar(64), '__global__'::varchar(64))
        AND deleted_at IS NULL
      RETURNING user_id`,
     [userId, roleId, orgId || null]

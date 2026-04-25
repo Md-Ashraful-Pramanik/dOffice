@@ -9,6 +9,8 @@ const {
   assertUserExists,
 } = require("./accessService");
 
+const SUPPORTED_DYNAMIC_FILTER_FIELDS = new Set(["designation", "department", "location", "status"]);
+
 function serializeTeam(team, members = [], overrides = []) {
   return {
     team: {
@@ -83,6 +85,14 @@ function validateOverrideEntries(overrides, message) {
 
 function validateDynamicFilter(value) {
   assert(isPlainObject(value), "dynamicFilter must be an object.", 422);
+  const keys = Object.keys(value);
+  assert(keys.length > 0, "dynamicFilter must include at least one supported field.", 422);
+  const invalidKey = keys.find((key) => !SUPPORTED_DYNAMIC_FILTER_FIELDS.has(key));
+  assert(
+    !invalidKey,
+    `dynamicFilter contains unsupported field: ${invalidKey}. Supported fields are designation, department, location, status.`,
+    422
+  );
   const invalidEntry = Object.values(value).some(
     (entry) => entry !== null && entry !== undefined && typeof entry !== "string"
   );
@@ -97,7 +107,7 @@ function parseNonNegativeInt(value, fallback) {
   const parsed = Number.parseInt(String(value), 10);
   if (Number.isNaN(parsed) || parsed < 0) {
     const error = new Error("Invalid query parameter.");
-    error.status = 400;
+    error.status = 422;
     throw error;
   }
 
@@ -169,14 +179,12 @@ async function createTeam(authUser, orgId, payload) {
     if (teamType === "dynamic") {
       validateDynamicFilter(teamPayload.dynamicFilter);
       assert(!Array.isArray(teamPayload.memberIds) || teamPayload.memberIds.length === 0, "Dynamic teams compute members automatically.", 422);
+    } else if (teamPayload.dynamicFilter !== undefined && teamPayload.dynamicFilter !== null) {
+      assert(false, "dynamicFilter is only supported for dynamic teams.", 422);
     }
 
     if (Array.isArray(teamPayload.permissionOverrides)) {
       validateOverrideEntries(teamPayload.permissionOverrides, "permissionOverrides must be a valid permission list");
-    }
-
-    if (teamPayload.dynamicFilter !== undefined && teamPayload.dynamicFilter !== null) {
-      validateDynamicFilter(teamPayload.dynamicFilter);
     }
 
     const teamId = generateId("team");
@@ -325,6 +333,7 @@ async function addMembers(authUser, orgId, teamId, payload) {
     assert(team.type === "static", "Cannot manually add members to a dynamic team.", 422);
 
     const userIds = payload.userIds || [];
+    assert(Array.isArray(userIds) && userIds.length > 0, "userIds must be a non-empty array of user IDs.", 422);
     for (const userId of userIds) {
       const user = await assertUserExists(userId, client);
       assert(user.org_id === orgId, "User is not part of this organization.", 422);

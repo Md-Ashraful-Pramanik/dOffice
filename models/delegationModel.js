@@ -5,7 +5,7 @@ async function listDelegationsByUser(userId, status = null, client = db) {
   const where = ["d.delegator_user_id = $1", "d.deleted_at IS NULL"];
 
   if (status === "active") {
-    where.push("d.status = 'active'", "d.start_date <= NOW()", "d.end_date >= NOW()", "d.revoked_at IS NULL");
+    where.push("d.status = 'active'", "d.end_date >= NOW()", "d.revoked_at IS NULL");
   } else if (status === "expired") {
     where.push("(d.status = 'expired' OR d.end_date < NOW())", "d.revoked_at IS NULL");
   } else if (status === "revoked") {
@@ -30,6 +30,7 @@ async function findDelegationById(id, client = db) {
             status, scope, created_at, updated_at, revoked_at, deleted_at
      FROM doffice_delegations
      WHERE id = $1
+       AND deleted_at IS NULL
      LIMIT 1`,
     [id]
   );
@@ -44,7 +45,14 @@ async function createDelegation(payload, client = db) {
     `INSERT INTO doffice_delegations (
       id, delegator_user_id, delegate_user_id, start_date, end_date, reason, status, scope
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, 'active', COALESCE($7::jsonb, '{}'::jsonb)
+      $1::varchar(64),
+      $2::varchar(64),
+      $3::varchar(64),
+      $4::timestamptz,
+      $5::timestamptz,
+      $6::text,
+      'active',
+      COALESCE($7::jsonb, '{}'::jsonb)
     )
     RETURNING id`,
     [
@@ -66,9 +74,9 @@ async function revokeDelegation(id, revokedBy, client = db) {
     `UPDATE doffice_delegations
      SET status = 'revoked',
          revoked_at = NOW(),
-         revoked_by = $2,
+         revoked_by = $2::varchar(64),
          updated_at = NOW()
-     WHERE id = $1
+     WHERE id = $1::varchar(64)
        AND deleted_at IS NULL
        AND (status <> 'revoked' AND revoked_at IS NULL)
      RETURNING id`,

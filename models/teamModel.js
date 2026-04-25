@@ -89,7 +89,15 @@ async function createTeam(payload, client = db) {
 
   const result = await client.query(
     `INSERT INTO doffice_teams (id, org_id, name, description, type, dynamic_filter, created_by)
-     VALUES ($1, $2, $3, $4, COALESCE($5, 'static'), $6::jsonb, $7)
+     VALUES (
+      $1::varchar(64),
+      $2::varchar(64),
+      $3::varchar(200),
+      $4::text,
+      $5::varchar(32),
+      $6::jsonb,
+      $7::varchar(64)
+     )
      RETURNING id`,
     [id, orgId, name, description || null, type || "static", JSON.stringify(dynamicFilter || null), createdBy || null]
   );
@@ -214,7 +222,7 @@ async function replaceTeamPermissionOverrides(teamId, overrides = [], client = d
     `UPDATE doffice_team_permission_overrides
      SET deleted_at = NOW(),
          updated_at = NOW()
-     WHERE team_id = $1
+     WHERE team_id = $1::varchar(64)
        AND deleted_at IS NULL`,
     [teamId]
   );
@@ -228,7 +236,9 @@ async function replaceTeamPermissionOverrides(teamId, overrides = [], client = d
 
   overrides.forEach((override, index) => {
     const base = index * 3;
-    values.push(`($1, $${base + 2}, $${base + 3}, $${base + 4})`);
+    values.push(
+      `($1::varchar(64), $${base + 2}::varchar(100), $${base + 3}::varchar(100), $${base + 4}::boolean)`
+    );
     params.push(override.module, override.action, override.allow);
   });
 
@@ -257,16 +267,16 @@ async function addMembersToTeam(teamId, userIds = [], addedBy, client = db) {
     await client.query(
       `UPDATE doffice_team_members
        SET deleted_at = NULL,
-           added_by = $3,
+           added_by = $3::varchar(64),
            created_at = NOW()
-       WHERE team_id = $1
-         AND user_id = $2`,
+       WHERE team_id = $1::varchar(64)
+         AND user_id = $2::varchar(64)`,
       [teamId, userId, addedBy || null]
     );
 
     await client.query(
       `INSERT INTO doffice_team_members (team_id, user_id, added_by)
-       SELECT $1, $2, $3
+       SELECT $1::varchar(64), $2::varchar(64), $3::varchar(64)
        WHERE NOT EXISTS (
          SELECT 1
          FROM doffice_team_members
@@ -283,8 +293,8 @@ async function softRemoveMember(teamId, userId, client = db) {
   const result = await client.query(
     `UPDATE doffice_team_members
      SET deleted_at = NOW()
-     WHERE team_id = $1
-       AND user_id = $2
+     WHERE team_id = $1::varchar(64)
+       AND user_id = $2::varchar(64)
        AND deleted_at IS NULL
      RETURNING id`,
     [teamId, userId]

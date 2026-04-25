@@ -463,15 +463,52 @@ function validatePermissionEntry(permission) {
   return isNonEmptyString(permission.module) && isNonEmptyString(permission.action) && typeof permission.allow === "boolean";
 }
 
+function validateDynamicFilterEntry(dynamicFilter) {
+  if (!isPlainObject(dynamicFilter)) {
+    return false;
+  }
+
+  const supportedFields = new Set(["designation", "department", "location", "status"]);
+  const keys = Object.keys(dynamicFilter);
+
+  if (!keys.length || keys.some((key) => !supportedFields.has(key))) {
+    return false;
+  }
+
+  return keys.every((key) => dynamicFilter[key] === null || dynamicFilter[key] === undefined || isNonEmptyString(dynamicFilter[key]));
+}
+
+function validateDelegationScope(scope) {
+  if (!isPlainObject(scope)) {
+    return false;
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(scope, "modules") &&
+    (!Array.isArray(scope.modules) || !scope.modules.every(isNonEmptyString))
+  ) {
+    return false;
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(scope, "permissions") &&
+    (!Array.isArray(scope.permissions) || !scope.permissions.every(isNonEmptyString))
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 function validateListRolesQuery(req, res, next) {
   const { search, type } = req.query || {};
 
   if (search !== undefined && typeof search !== "string") {
-    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: search." } });
+    return res.status(422).json({ errors: { search: ["is invalid"] } });
   }
 
   if (type !== undefined && type !== "system" && type !== "custom") {
-    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: type." } });
+    return res.status(422).json({ errors: { type: ["must be system or custom"] } });
   }
 
   next();
@@ -557,7 +594,7 @@ function validateEffectivePermissionsQuery(req, res, next) {
   const { orgId } = req.query || {};
 
   if (orgId !== undefined && !isNonEmptyString(orgId)) {
-    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: orgId." } });
+    return res.status(422).json({ errors: { orgId: ["is invalid"] } });
   }
 
   next();
@@ -567,19 +604,19 @@ function validateListTeamsQuery(req, res, next) {
   const { search, type, limit, offset } = req.query || {};
 
   if (search !== undefined && typeof search !== "string") {
-    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: search." } });
+    return res.status(422).json({ errors: { search: ["is invalid"] } });
   }
 
   if (type !== undefined && type !== "static" && type !== "dynamic") {
-    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: type." } });
+    return res.status(422).json({ errors: { type: ["must be static or dynamic"] } });
   }
 
   if (limit !== undefined && parseNonNegativeInteger(limit) === null) {
-    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: limit." } });
+    return res.status(422).json({ errors: { limit: ["must be a non-negative integer"] } });
   }
 
   if (offset !== undefined && parseNonNegativeInteger(offset) === null) {
-    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: offset." } });
+    return res.status(422).json({ errors: { offset: ["must be a non-negative integer"] } });
   }
 
   next();
@@ -615,12 +652,20 @@ function validateCreateTeamPayload(req, res, next) {
     return res.status(422).json({ errors: { permissionOverrides: ["must be a valid permission list"] } });
   }
 
-  if (team.dynamicFilter !== undefined && !isPlainObject(team.dynamicFilter)) {
-    return res.status(422).json({ errors: { dynamicFilter: ["must be an object"] } });
+  if (team.dynamicFilter !== undefined && !validateDynamicFilterEntry(team.dynamicFilter)) {
+    return res.status(422).json({
+      errors: {
+        dynamicFilter: ["must be an object with supported fields: designation, department, location, status"],
+      },
+    });
   }
 
   if (team.type === "dynamic" && !isPlainObject(team.dynamicFilter)) {
     return res.status(422).json({ errors: { dynamicFilter: ["is required for dynamic teams"] } });
+  }
+
+  if (team.type !== "dynamic" && team.dynamicFilter !== undefined) {
+    return res.status(422).json({ errors: { dynamicFilter: ["is only allowed for dynamic teams"] } });
   }
 
   next();
@@ -655,8 +700,15 @@ function validateUpdateTeamPayload(req, res, next) {
     return res.status(422).json({ errors: { permissionOverrides: ["must be a valid permission list"] } });
   }
 
-  if (Object.prototype.hasOwnProperty.call(team, "dynamicFilter") && !isPlainObject(team.dynamicFilter)) {
-    return res.status(422).json({ errors: { dynamicFilter: ["must be an object"] } });
+  if (
+    Object.prototype.hasOwnProperty.call(team, "dynamicFilter") &&
+    !validateDynamicFilterEntry(team.dynamicFilter)
+  ) {
+    return res.status(422).json({
+      errors: {
+        dynamicFilter: ["must be an object with supported fields: designation, department, location, status"],
+      },
+    });
   }
 
   next();
@@ -676,7 +728,7 @@ function validateListDelegationsQuery(req, res, next) {
   const { status } = req.query || {};
 
   if (status !== undefined && !["active", "expired", "revoked"].includes(status)) {
-    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: status." } });
+    return res.status(422).json({ errors: { status: ["must be active, expired, or revoked"] } });
   }
 
   next();
@@ -697,8 +749,8 @@ function validateCreateDelegationPayload(req, res, next) {
     return res.status(422).json({ errors: { reason: ["must be a string or null"] } });
   }
 
-  if (delegation.scope !== undefined && !isPlainObject(delegation.scope)) {
-    return res.status(422).json({ errors: { scope: ["must be an object"] } });
+  if (delegation.scope !== undefined && !validateDelegationScope(delegation.scope)) {
+    return res.status(422).json({ errors: { scope: ["must be an object with modules and permissions arrays of non-empty strings"] } });
   }
 
   next();
