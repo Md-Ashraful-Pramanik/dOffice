@@ -109,22 +109,22 @@ async function assignRole(userId, roleId, client = db) {
          created_at = NOW()
      WHERE user_id = $1
        AND role_id = $2
-       AND COALESCE(org_id, '__global__') = '__global__'`,
-    [userId, roleId]
+       AND org_id IS NULL`,
+    [String(userId), String(roleId)]
   );
 
   await client.query(
     `INSERT INTO doffice_user_roles (user_id, role_id, org_id)
-     SELECT $1, $2, NULL
+     SELECT $1::varchar(64), $2::varchar(64), NULL::varchar(64)
      WHERE NOT EXISTS (
        SELECT 1
        FROM doffice_user_roles
        WHERE user_id = $1
          AND role_id = $2
-         AND COALESCE(org_id, '__global__') = '__global__'
+         AND org_id IS NULL
          AND deleted_at IS NULL
      )`,
-    [userId, roleId]
+    [String(userId), String(roleId)]
   );
 }
 
