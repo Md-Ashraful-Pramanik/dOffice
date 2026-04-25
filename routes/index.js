@@ -7,6 +7,7 @@ const organizationRoutes = require("./organizationRoutes");
 const roleRoutes = require("./roleRoutes");
 const teamRoutes = require("./teamRoutes");
 const delegationRoutes = require("./delegationRoutes");
+const channelRoutes = require("./channelRoutes");
 
 const router = express.Router();
 
@@ -17,5 +18,6 @@ router.use(organizationRoutes);
 router.use(roleRoutes);
 router.use(teamRoutes);
 router.use(delegationRoutes);
+router.use(channelRoutes);
 
 module.exports = router;

@@ -706,6 +706,206 @@ async function runMigrations() {
       WHERE deleted_at IS NULL;
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_channel_categories (
+        id VARCHAR(64) PRIMARY KEY,
+        org_id VARCHAR(64) NOT NULL REFERENCES doffice_organizations(id) ON DELETE CASCADE,
+        name VARCHAR(160) NOT NULL,
+        position INTEGER NOT NULL DEFAULT 1,
+        created_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        deleted_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_channel_categories
+      ADD COLUMN IF NOT EXISTS created_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_channel_categories
+      ADD COLUMN IF NOT EXISTS deleted_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_channel_categories
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_doffice_channel_categories_active_name_scope
+      ON doffice_channel_categories(org_id, LOWER(name))
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_channel_categories_org_position
+      ON doffice_channel_categories(org_id, position)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_channels (
+        id VARCHAR(64) PRIMARY KEY,
+        org_id VARCHAR(64) NOT NULL REFERENCES doffice_organizations(id) ON DELETE CASCADE,
+        category_id VARCHAR(64) REFERENCES doffice_channel_categories(id) ON DELETE SET NULL,
+        name VARCHAR(160) NOT NULL,
+        type VARCHAR(32) NOT NULL,
+        description TEXT,
+        topic TEXT,
+        e2ee BOOLEAN NOT NULL DEFAULT FALSE,
+        slow_mode_interval INTEGER NOT NULL DEFAULT 0,
+        created_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        deleted_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_channels
+      ADD COLUMN IF NOT EXISTS category_id VARCHAR(64) REFERENCES doffice_channel_categories(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_channels
+      ADD COLUMN IF NOT EXISTS description TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_channels
+      ADD COLUMN IF NOT EXISTS topic TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_channels
+      ADD COLUMN IF NOT EXISTS e2ee BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_channels
+      ADD COLUMN IF NOT EXISTS slow_mode_interval INTEGER NOT NULL DEFAULT 0;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_channels
+      ADD COLUMN IF NOT EXISTS created_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_channels
+      ADD COLUMN IF NOT EXISTS deleted_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_channels
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_channels_type_check'
+        ) THEN
+          ALTER TABLE doffice_channels
+          ADD CONSTRAINT doffice_channels_type_check
+          CHECK (type IN ('public', 'private', 'announcement', 'cross-org'));
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_doffice_channels_active_name_scope
+      ON doffice_channels(org_id, LOWER(name))
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_channels_org_id
+      ON doffice_channels(org_id)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_channels_category_id
+      ON doffice_channels(category_id)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_channels_type
+      ON doffice_channels(type)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_channel_members (
+        channel_id VARCHAR(64) NOT NULL REFERENCES doffice_channels(id) ON DELETE CASCADE,
+        user_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        role VARCHAR(16) NOT NULL DEFAULT 'member',
+        invited_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (channel_id, user_id)
+      );
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_channel_members
+      ADD COLUMN IF NOT EXISTS invited_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_channel_members
+      ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_channel_members
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_channel_members
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_channel_members_role_check'
+        ) THEN
+          ALTER TABLE doffice_channel_members
+          ADD CONSTRAINT doffice_channel_members_role_check
+          CHECK (role IN ('admin', 'moderator', 'member'));
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_channel_members_channel_role
+      ON doffice_channel_members(channel_id, role)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_channel_members_user_id
+      ON doffice_channel_members(user_id)
+      WHERE deleted_at IS NULL;
+    `);
+
     await client.query(
       `INSERT INTO doffice_roles (id, name, description, type, is_system)
        VALUES ($1, $2, $3, 'system', TRUE)

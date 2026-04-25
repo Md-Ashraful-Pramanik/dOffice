@@ -756,6 +756,228 @@ function validateCreateDelegationPayload(req, res, next) {
   next();
 }
 
+function isPositiveInteger(value) {
+  if (value === undefined || value === null || value === "") {
+    return false;
+  }
+
+  if (typeof value !== "string" && typeof value !== "number") {
+    return false;
+  }
+
+  const normalized = String(value).trim();
+  if (!/^\d+$/.test(normalized)) {
+    return false;
+  }
+
+  return Number.parseInt(normalized, 10) > 0;
+}
+
+function validateListChannelsQuery(req, res, next) {
+  const { search, type, categoryId, joined, limit, offset } = req.query || {};
+  const validTypes = new Set(["public", "private", "announcement", "cross-org"]);
+
+  if (search !== undefined && typeof search !== "string") {
+    return res.status(422).json({ errors: { search: ["must be a string"] } });
+  }
+
+  if (type !== undefined && (!isNonEmptyString(type) || !validTypes.has(type))) {
+    return res.status(422).json({ errors: { type: ["must be public, private, announcement, or cross-org"] } });
+  }
+
+  if (categoryId !== undefined && !isNonEmptyString(categoryId)) {
+    return res.status(422).json({ errors: { categoryId: ["must be a non-empty string"] } });
+  }
+
+  if (joined !== undefined && joined !== "true" && joined !== "false") {
+    return res.status(422).json({ errors: { joined: ["must be true or false"] } });
+  }
+
+  if (limit !== undefined && parseNonNegativeInteger(limit) === null) {
+    return res.status(422).json({ errors: { limit: ["must be a non-negative integer"] } });
+  }
+
+  if (offset !== undefined && parseNonNegativeInteger(offset) === null) {
+    return res.status(422).json({ errors: { offset: ["must be a non-negative integer"] } });
+  }
+
+  next();
+}
+
+function validateCreateChannelPayload(req, res, next) {
+  const channel = req.body && req.body.channel;
+  const validTypes = new Set(["public", "private", "announcement", "cross-org"]);
+
+  if (!isPlainObject(channel)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  if (!isNonEmptyString(channel.name) || !isNonEmptyString(channel.type)) {
+    return res.status(422).json({ errors: { body: ["required fields: name, type"] } });
+  }
+
+  if (!validTypes.has(channel.type)) {
+    return res.status(422).json({ errors: { type: ["is invalid"] } });
+  }
+
+  if (channel.description !== undefined && !isNullableString(channel.description)) {
+    return res.status(422).json({ errors: { description: ["must be a string or null"] } });
+  }
+
+  if (channel.categoryId !== undefined && channel.categoryId !== null && !isNonEmptyString(channel.categoryId)) {
+    return res.status(422).json({ errors: { categoryId: ["must be a non-empty string or null"] } });
+  }
+
+  if (channel.topic !== undefined && !isNullableString(channel.topic)) {
+    return res.status(422).json({ errors: { topic: ["must be a string or null"] } });
+  }
+
+  if (channel.memberIds !== undefined) {
+    if (!Array.isArray(channel.memberIds) || !channel.memberIds.every(isNonEmptyString)) {
+      return res.status(422).json({ errors: { memberIds: ["must be an array of user IDs"] } });
+    }
+  }
+
+  if (channel.e2ee !== undefined && typeof channel.e2ee !== "boolean") {
+    return res.status(422).json({ errors: { e2ee: ["must be a boolean"] } });
+  }
+
+  next();
+}
+
+function validateUpdateChannelPayload(req, res, next) {
+  const channel = req.body && req.body.channel;
+  const validTypes = new Set(["public", "private", "announcement", "cross-org"]);
+
+  if (!isPlainObject(channel)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  const allowedFields = ["name", "description", "topic", "categoryId", "type"];
+  const hasAllowedField = allowedFields.some((field) => Object.prototype.hasOwnProperty.call(channel, field));
+  if (!hasAllowedField) {
+    return res.status(422).json({ errors: { body: ["at least one updatable field is required"] } });
+  }
+
+  if (channel.name !== undefined && !isNonEmptyString(channel.name)) {
+    return res.status(422).json({ errors: { name: ["can't be blank"] } });
+  }
+
+  if (channel.description !== undefined && !isNullableString(channel.description)) {
+    return res.status(422).json({ errors: { description: ["must be a string or null"] } });
+  }
+
+  if (channel.topic !== undefined && !isNullableString(channel.topic)) {
+    return res.status(422).json({ errors: { topic: ["must be a string or null"] } });
+  }
+
+  if (channel.categoryId !== undefined && channel.categoryId !== null && !isNonEmptyString(channel.categoryId)) {
+    return res.status(422).json({ errors: { categoryId: ["must be a non-empty string or null"] } });
+  }
+
+  if (channel.type !== undefined && (!isNonEmptyString(channel.type) || !validTypes.has(channel.type))) {
+    return res.status(422).json({ errors: { type: ["is invalid"] } });
+  }
+
+  next();
+}
+
+function validateInviteChannelMembersPayload(req, res, next) {
+  const { userIds } = req.body || {};
+
+  if (!Array.isArray(userIds) || !userIds.length || !userIds.every(isNonEmptyString)) {
+    return res.status(422).json({ errors: { userIds: ["must be a non-empty array of user IDs"] } });
+  }
+
+  next();
+}
+
+function validateListChannelMembersQuery(req, res, next) {
+  const { search, role, limit, offset } = req.query || {};
+  const validRoles = new Set(["admin", "moderator", "member"]);
+
+  if (search !== undefined && typeof search !== "string") {
+    return res.status(422).json({ errors: { search: ["must be a string"] } });
+  }
+
+  if (role !== undefined && (!isNonEmptyString(role) || !validRoles.has(role))) {
+    return res.status(422).json({ errors: { role: ["must be admin, moderator, or member"] } });
+  }
+
+  if (limit !== undefined && parseNonNegativeInteger(limit) === null) {
+    return res.status(422).json({ errors: { limit: ["must be a non-negative integer"] } });
+  }
+
+  if (offset !== undefined && parseNonNegativeInteger(offset) === null) {
+    return res.status(422).json({ errors: { offset: ["must be a non-negative integer"] } });
+  }
+
+  next();
+}
+
+function validateSetChannelMemberRolePayload(req, res, next) {
+  const { role } = req.body || {};
+  const validRoles = new Set(["admin", "moderator", "member"]);
+
+  if (!isNonEmptyString(role) || !validRoles.has(role)) {
+    return res.status(422).json({ errors: { role: ["must be admin, moderator, or member"] } });
+  }
+
+  next();
+}
+
+function validateCreateCategoryPayload(req, res, next) {
+  const category = req.body && req.body.category;
+
+  if (!isPlainObject(category)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  if (!isNonEmptyString(category.name)) {
+    return res.status(422).json({ errors: { name: ["can't be blank"] } });
+  }
+
+  if (category.position !== undefined && !isPositiveInteger(category.position)) {
+    return res.status(422).json({ errors: { position: ["must be a positive integer"] } });
+  }
+
+  next();
+}
+
+function validateUpdateCategoryPayload(req, res, next) {
+  const category = req.body && req.body.category;
+
+  if (!isPlainObject(category)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  const hasUpdatableField = Object.prototype.hasOwnProperty.call(category, "name")
+    || Object.prototype.hasOwnProperty.call(category, "position");
+  if (!hasUpdatableField) {
+    return res.status(422).json({ errors: { body: ["at least one updatable field is required"] } });
+  }
+
+  if (category.name !== undefined && !isNonEmptyString(category.name)) {
+    return res.status(422).json({ errors: { name: ["can't be blank"] } });
+  }
+
+  if (category.position !== undefined && !isPositiveInteger(category.position)) {
+    return res.status(422).json({ errors: { position: ["must be a positive integer"] } });
+  }
+
+  next();
+}
+
+function validateReorderCategoriesPayload(req, res, next) {
+  const { order } = req.body || {};
+
+  if (!Array.isArray(order) || !order.every(isNonEmptyString)) {
+    return res.status(422).json({ errors: { order: ["must be an array of category IDs"] } });
+  }
+
+  next();
+}
+
 module.exports = {
   validateRegisterPayload,
   validateLoginPayload,
@@ -783,4 +1005,13 @@ module.exports = {
   validateAddMembersPayload,
   validateListDelegationsQuery,
   validateCreateDelegationPayload,
+  validateListChannelsQuery,
+  validateCreateChannelPayload,
+  validateUpdateChannelPayload,
+  validateInviteChannelMembersPayload,
+  validateListChannelMembersQuery,
+  validateSetChannelMemberRolePayload,
+  validateCreateCategoryPayload,
+  validateUpdateCategoryPayload,
+  validateReorderCategoriesPayload,
 };
