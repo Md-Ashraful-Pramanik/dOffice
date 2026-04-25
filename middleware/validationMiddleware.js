@@ -451,6 +451,243 @@ function validateDirectoryQuery(req, res, next) {
   next();
 }
 
+function validatePermissionEntry(permission) {
+  if (!isPlainObject(permission)) {
+    return false;
+  }
+
+  return isNonEmptyString(permission.module) && isNonEmptyString(permission.action) && typeof permission.allow === "boolean";
+}
+
+function validateListRolesQuery(req, res, next) {
+  const { search, type } = req.query || {};
+
+  if (search !== undefined && typeof search !== "string") {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: search." } });
+  }
+
+  if (type !== undefined && type !== "system" && type !== "custom") {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: type." } });
+  }
+
+  next();
+}
+
+function validateCreateRolePayload(req, res, next) {
+  const role = req.body && req.body.role;
+
+  if (!isPlainObject(role)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  if (!isNonEmptyString(role.name)) {
+    return res.status(422).json({ errors: { name: ["can't be blank"] } });
+  }
+
+  if (!Array.isArray(role.permissions) || !role.permissions.length || !role.permissions.every(validatePermissionEntry)) {
+    return res.status(422).json({ errors: { permissions: ["must be a non-empty list of permissions"] } });
+  }
+
+  if (role.description !== undefined && role.description !== null && typeof role.description !== "string") {
+    return res.status(422).json({ errors: { description: ["must be a string or null"] } });
+  }
+
+  if (role.inheritsFrom !== undefined && role.inheritsFrom !== null && !isNonEmptyString(role.inheritsFrom)) {
+    return res.status(422).json({ errors: { inheritsFrom: ["must be a non-empty string or null"] } });
+  }
+
+  next();
+}
+
+function validateUpdateRolePayload(req, res, next) {
+  const role = req.body && req.body.role;
+
+  if (!isPlainObject(role)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  const allowedFields = ["name", "description", "permissions", "inheritsFrom"];
+  const keys = Object.keys(role);
+
+  if (!keys.length || !keys.every((key) => allowedFields.includes(key))) {
+    return res.status(422).json({ errors: { body: ["contains unsupported fields"] } });
+  }
+
+  if (Object.prototype.hasOwnProperty.call(role, "name") && !isNonEmptyString(role.name)) {
+    return res.status(422).json({ errors: { name: ["can't be blank"] } });
+  }
+
+  if (Object.prototype.hasOwnProperty.call(role, "description") && role.description !== null && typeof role.description !== "string") {
+    return res.status(422).json({ errors: { description: ["must be a string or null"] } });
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(role, "inheritsFrom") &&
+    role.inheritsFrom !== null &&
+    !isNonEmptyString(role.inheritsFrom)
+  ) {
+    return res.status(422).json({ errors: { inheritsFrom: ["must be a non-empty string or null"] } });
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(role, "permissions") &&
+    (!Array.isArray(role.permissions) || !role.permissions.every(validatePermissionEntry))
+  ) {
+    return res.status(422).json({ errors: { permissions: ["must be a list of permissions"] } });
+  }
+
+  next();
+}
+
+function validateAssignRolePayload(req, res, next) {
+  const { roleId, orgId } = req.body || {};
+
+  if (!isNonEmptyString(roleId) || !isNonEmptyString(orgId)) {
+    return res.status(422).json({ errors: { body: ["required fields: roleId, orgId"] } });
+  }
+
+  next();
+}
+
+function validateEffectivePermissionsQuery(req, res, next) {
+  const { orgId } = req.query || {};
+
+  if (orgId !== undefined && !isNonEmptyString(orgId)) {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: orgId." } });
+  }
+
+  next();
+}
+
+function validateListTeamsQuery(req, res, next) {
+  const { search, type, limit, offset } = req.query || {};
+
+  if (search !== undefined && typeof search !== "string") {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: search." } });
+  }
+
+  if (type !== undefined && type !== "static" && type !== "dynamic") {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: type." } });
+  }
+
+  if (limit !== undefined && parseNonNegativeInteger(limit) === null) {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: limit." } });
+  }
+
+  if (offset !== undefined && parseNonNegativeInteger(offset) === null) {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: offset." } });
+  }
+
+  next();
+}
+
+function validateCreateTeamPayload(req, res, next) {
+  const team = req.body && req.body.team;
+
+  if (!isPlainObject(team)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  if (!isNonEmptyString(team.name)) {
+    return res.status(422).json({ errors: { name: ["can't be blank"] } });
+  }
+
+  if (team.type !== undefined && team.type !== "static" && team.type !== "dynamic") {
+    return res.status(422).json({ errors: { type: ["must be static or dynamic"] } });
+  }
+
+  if (team.memberIds !== undefined && (!Array.isArray(team.memberIds) || !team.memberIds.every(isNonEmptyString))) {
+    return res.status(422).json({ errors: { memberIds: ["must be an array of user IDs"] } });
+  }
+
+  if (
+    team.permissionOverrides !== undefined &&
+    (!Array.isArray(team.permissionOverrides) || !team.permissionOverrides.every(validatePermissionEntry))
+  ) {
+    return res.status(422).json({ errors: { permissionOverrides: ["must be a valid permission list"] } });
+  }
+
+  if (team.dynamicFilter !== undefined && !isPlainObject(team.dynamicFilter)) {
+    return res.status(422).json({ errors: { dynamicFilter: ["must be an object"] } });
+  }
+
+  next();
+}
+
+function validateUpdateTeamPayload(req, res, next) {
+  const team = req.body && req.body.team;
+
+  if (!isPlainObject(team)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  const allowedFields = ["name", "description", "permissionOverrides", "dynamicFilter"];
+  const keys = Object.keys(team);
+
+  if (!keys.length || !keys.every((key) => allowedFields.includes(key))) {
+    return res.status(422).json({ errors: { body: ["contains unsupported fields"] } });
+  }
+
+  if (Object.prototype.hasOwnProperty.call(team, "name") && !isNonEmptyString(team.name)) {
+    return res.status(422).json({ errors: { name: ["can't be blank"] } });
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(team, "permissionOverrides") &&
+    (!Array.isArray(team.permissionOverrides) || !team.permissionOverrides.every(validatePermissionEntry))
+  ) {
+    return res.status(422).json({ errors: { permissionOverrides: ["must be a valid permission list"] } });
+  }
+
+  if (Object.prototype.hasOwnProperty.call(team, "dynamicFilter") && !isPlainObject(team.dynamicFilter)) {
+    return res.status(422).json({ errors: { dynamicFilter: ["must be an object"] } });
+  }
+
+  next();
+}
+
+function validateAddMembersPayload(req, res, next) {
+  const { userIds } = req.body || {};
+
+  if (!Array.isArray(userIds) || !userIds.length || !userIds.every(isNonEmptyString)) {
+    return res.status(422).json({ errors: { userIds: ["must be a non-empty array of user IDs"] } });
+  }
+
+  next();
+}
+
+function validateListDelegationsQuery(req, res, next) {
+  const { status } = req.query || {};
+
+  if (status !== undefined && !["active", "expired", "revoked"].includes(status)) {
+    return res.status(400).json({ error: { status: 400, message: "Invalid query parameter: status." } });
+  }
+
+  next();
+}
+
+function validateCreateDelegationPayload(req, res, next) {
+  const delegation = req.body && req.body.delegation;
+
+  if (!isPlainObject(delegation)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  if (!isNonEmptyString(delegation.delegateUserId) || !isNonEmptyString(delegation.startDate) || !isNonEmptyString(delegation.endDate)) {
+    return res.status(422).json({ errors: { body: ["required fields: delegateUserId, startDate, endDate"] } });
+  }
+
+  if (delegation.reason !== undefined && delegation.reason !== null && typeof delegation.reason !== "string") {
+    return res.status(422).json({ errors: { reason: ["must be a string or null"] } });
+  }
+
+  if (delegation.scope !== undefined && !isPlainObject(delegation.scope)) {
+    return res.status(422).json({ errors: { scope: ["must be an object"] } });
+  }
+
+  next();
+}
+
 module.exports = {
   validateRegisterPayload,
   validateLoginPayload,
@@ -467,4 +704,15 @@ module.exports = {
   validateUpdateOrganizationUserPayload,
   validateListUsersQuery,
   validateDirectoryQuery,
+  validateListRolesQuery,
+  validateCreateRolePayload,
+  validateUpdateRolePayload,
+  validateAssignRolePayload,
+  validateEffectivePermissionsQuery,
+  validateListTeamsQuery,
+  validateCreateTeamPayload,
+  validateUpdateTeamPayload,
+  validateAddMembersPayload,
+  validateListDelegationsQuery,
+  validateCreateDelegationPayload,
 };
