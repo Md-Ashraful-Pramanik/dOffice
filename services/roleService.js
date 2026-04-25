@@ -34,6 +34,15 @@ function dedupePermissions(permissions = []) {
   return Array.from(map.values());
 }
 
+function normalizeOptionalId(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+  return normalized || null;
+}
+
 function serializeRole(role, permissions) {
   return {
     role: {
@@ -129,13 +138,19 @@ async function createRole(authUser, orgId, payload) {
     const rolePayload = payload.role || {};
     const roleId = generateId("role");
 
+    const inheritsFrom = normalizeOptionalId(rolePayload.inheritsFrom);
+    if (inheritsFrom) {
+      const inheritedRole = await roleModel.findRoleById(inheritsFrom, orgId, client);
+      assert(inheritedRole, "Resource not found.", 404);
+    }
+
     await roleModel.createRole(
       {
         id: roleId,
         name: rolePayload.name.trim(),
         description: rolePayload.description || null,
         type: "custom",
-        inheritsFrom: rolePayload.inheritsFrom || null,
+        inheritsFrom,
         orgId,
         createdBy: authUser.id,
       },
@@ -177,12 +192,21 @@ async function updateRole(authUser, orgId, roleId, payload) {
     if (Object.prototype.hasOwnProperty.call(updates, "name") ||
       Object.prototype.hasOwnProperty.call(updates, "description") ||
       Object.prototype.hasOwnProperty.call(updates, "inheritsFrom")) {
+      const inheritsFrom = Object.prototype.hasOwnProperty.call(updates, "inheritsFrom")
+        ? normalizeOptionalId(updates.inheritsFrom)
+        : undefined;
+
+      if (Object.prototype.hasOwnProperty.call(updates, "inheritsFrom") && inheritsFrom) {
+        const inheritedRole = await roleModel.findRoleById(inheritsFrom, orgId, client);
+        assert(inheritedRole, "Resource not found.", 404);
+      }
+
       await roleModel.updateRole(
         roleId,
         {
           ...(Object.prototype.hasOwnProperty.call(updates, "name") ? { name: updates.name.trim() } : {}),
           ...(Object.prototype.hasOwnProperty.call(updates, "description") ? { description: updates.description || null } : {}),
-          ...(Object.prototype.hasOwnProperty.call(updates, "inheritsFrom") ? { inheritsFrom: updates.inheritsFrom || null } : {}),
+          ...(Object.prototype.hasOwnProperty.call(updates, "inheritsFrom") ? { inheritsFrom } : {}),
         },
         client
       );
@@ -247,6 +271,7 @@ async function assignRoleToUser(authUser, userId, payload) {
     assertOrgAccess(orgId, accessContext);
 
     const user = await assertUserExists(userId, client);
+    assert(user.org_id === orgId, "User is not part of this organization.", 422);
     const role = await roleModel.findRoleById(roleId, orgId, client);
     assert(role, "Resource not found.", 404);
 
@@ -311,33 +336,6 @@ async function listAllPermissions(authUser) {
   };
 }
 
-function resolveRolePermission(rolesPermissionsMap, roleIds, moduleName, actionName) {
-  for (const roleId of roleIds) {
-    const permissions = rolesPermissionsMap.get(roleId) || [];
-    const exact = permissions.find((permission) => permission.module === moduleName && permission.action === actionName);
-    if (exact) {
-      return {
-        module: moduleName,
-        action: actionName,
-        allow: exact.allow,
-        source: `role:${roleId}`,
-      };
-    }
-
-    const wildcard = permissions.find((permission) => permission.module === moduleName && permission.action === "*");
-    if (wildcard) {
-      return {
-        module: moduleName,
-        action: actionName,
-        allow: wildcard.allow,
-        source: `role:${roleId}`,
-      };
-    }
-  }
-
-  return null;
-}
-
 async function getEffectivePermissions(authUser, userId, orgId) {
   const client = await db.pool.connect();
 
@@ -357,25 +355,21 @@ async function getEffectivePermissions(authUser, userId, orgId) {
     const roleIds = assignments.map((item) => item.role_id);
     const rolePermissions = await roleModel.listRolePermissions(roleIds, client);
 
-    const roleMap = new Map();
-    rolePermissions.forEach((permission) => {
-      if (!roleMap.has(permission.role_id)) {
-        roleMap.set(permission.role_id, []);
-      }
-      roleMap.get(permission.role_id).push(permission);
-    });
-
     const teamOverrides = await teamModel.listUserTeamOverrides(userId, targetOrgId, client);
 
     const computedMap = new Map();
 
-    Object.entries(PERMISSION_CATALOG).forEach(([moduleName, actions]) => {
-      actions.forEach((actionName) => {
-        const rolePermission = resolveRolePermission(roleMap, roleIds, moduleName, actionName);
-        if (rolePermission) {
-          computedMap.set(`${moduleName}:${actionName}`, rolePermission);
-        }
-      });
+    roleIds.forEach((roleId) => {
+      rolePermissions
+        .filter((permission) => permission.role_id === roleId)
+        .forEach((permission) => {
+          computedMap.set(`${permission.module}:${permission.action}`, {
+            module: permission.module,
+            action: permission.action,
+            allow: permission.allow,
+            source: `role:${roleId}`,
+          });
+        });
     });
 
     teamOverrides.forEach((override) => {

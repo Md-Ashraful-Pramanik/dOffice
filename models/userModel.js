@@ -14,6 +14,11 @@ async function getUserCount(client = db) {
   return result.rows[0].count;
 }
 
+async function getUserTotalCount(client = db) {
+  const result = await client.query("SELECT COUNT(*)::int AS count FROM doffice_users");
+  return result.rows[0].count;
+}
+
 async function findByEmail(email, client = db) {
   const result = await client.query(
     `${USER_BASE_SELECT}
@@ -421,6 +426,7 @@ async function touchUserLastSeen(userId, client = db) {
 
 module.exports = {
   getUserCount,
+  getUserTotalCount,
   findByEmail,
   findById,
   createUser,

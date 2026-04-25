@@ -72,7 +72,9 @@ async function createSessionForUser(userId, client = db) {
 }
 
 async function registerSuperAdmin(payload) {
-  const { username, email, password } = payload || {};
+  const username = typeof payload?.username === "string" ? payload.username.trim() : "";
+  const email = typeof payload?.email === "string" ? payload.email.trim().toLowerCase() : "";
+  const password = typeof payload?.password === "string" ? payload.password : "";
 
   if (!username || !email || !password) {
     const error = new Error("Required fields: username, email, password.");
@@ -84,7 +86,7 @@ async function registerSuperAdmin(payload) {
   try {
     await client.query("BEGIN");
 
-    const userCount = await userModel.getUserCount(client);
+    const userCount = await userModel.getUserTotalCount(client);
     if (userCount > 0) {
       const error = new Error("Super admin is already registered.");
       error.status = 403;

@@ -55,14 +55,25 @@ async function runMigrations() {
     await client.query(`
       UPDATE doffice_roles
       SET is_system = CASE
-        WHEN id IN ('role_super_admin', 'role_org_admin', 'role_org_user') THEN TRUE
+        WHEN id IN ('role_super_admin', 'role_org_admin', 'role_org_user', 'role_manager', 'role_employee') THEN TRUE
         ELSE is_system
       END,
       type = CASE
-        WHEN id IN ('role_super_admin', 'role_org_admin', 'role_org_user') THEN 'system'
+        WHEN id IN ('role_super_admin', 'role_org_admin', 'role_org_user', 'role_manager', 'role_employee') THEN 'system'
         WHEN type IS NULL OR type = '' THEN 'custom'
         ELSE type
       END
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_roles
+      DROP CONSTRAINT IF EXISTS doffice_roles_name_key;
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_doffice_roles_active_name_scope
+      ON doffice_roles(COALESCE(org_id, '__global__'), LOWER(name))
       WHERE deleted_at IS NULL;
     `);
 
@@ -545,30 +556,69 @@ async function runMigrations() {
     `);
 
     await client.query(
-      `INSERT INTO doffice_roles (id, name, description)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (name) DO NOTHING`,
+      `INSERT INTO doffice_roles (id, name, description, type, is_system)
+       VALUES ($1, $2, $3, 'system', TRUE)
+       ON CONFLICT (id) DO UPDATE
+         SET name = EXCLUDED.name,
+             description = EXCLUDED.description,
+             type = 'system',
+             is_system = TRUE,
+             updated_at = NOW()`,
       ["role_super_admin", "Super Admin", "Global administrator role"]
     );
 
     await client.query(
-      `INSERT INTO doffice_roles (id, name, description)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (name) DO NOTHING`,
+      `INSERT INTO doffice_roles (id, name, description, type, is_system)
+       VALUES ($1, $2, $3, 'system', TRUE)
+       ON CONFLICT (id) DO UPDATE
+         SET name = EXCLUDED.name,
+             description = EXCLUDED.description,
+             type = 'system',
+             is_system = TRUE,
+             updated_at = NOW()`,
       ["role_org_user", "Organization User", "Default organization user role"]
     );
 
     await client.query(
-      `INSERT INTO doffice_roles (id, name, description)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (name) DO NOTHING`,
+      `INSERT INTO doffice_roles (id, name, description, type, is_system)
+       VALUES ($1, $2, $3, 'system', TRUE)
+       ON CONFLICT (id) DO UPDATE
+         SET name = EXCLUDED.name,
+             description = EXCLUDED.description,
+             type = 'system',
+             is_system = TRUE,
+             updated_at = NOW()`,
       ["role_org_admin", "Organization Admin", "Organization administrator role"]
+    );
+
+    await client.query(
+      `INSERT INTO doffice_roles (id, name, description, type, is_system)
+       VALUES ($1, $2, $3, 'system', TRUE)
+       ON CONFLICT (id) DO UPDATE
+         SET name = EXCLUDED.name,
+             description = EXCLUDED.description,
+             type = 'system',
+             is_system = TRUE,
+             updated_at = NOW()`,
+      ["role_manager", "Manager", "Manager role"]
+    );
+
+    await client.query(
+      `INSERT INTO doffice_roles (id, name, description, type, is_system)
+       VALUES ($1, $2, $3, 'system', TRUE)
+       ON CONFLICT (id) DO UPDATE
+         SET name = EXCLUDED.name,
+             description = EXCLUDED.description,
+             type = 'system',
+             is_system = TRUE,
+             updated_at = NOW()`,
+      ["role_employee", "Employee", "Employee role"]
     );
 
     await client.query(`
       UPDATE doffice_roles
       SET type = 'system', is_system = TRUE, updated_at = NOW()
-      WHERE id IN ('role_super_admin', 'role_org_admin', 'role_org_user');
+      WHERE id IN ('role_super_admin', 'role_org_admin', 'role_org_user', 'role_manager', 'role_employee');
     `);
 
     await client.query(`
@@ -585,6 +635,15 @@ async function runMigrations() {
           ('role_org_admin', 'users', '*', TRUE),
           ('role_org_admin', 'messaging', '*', TRUE),
           ('role_org_admin', 'tasks', '*', TRUE),
+          ('role_manager', 'organizations', 'read', TRUE),
+          ('role_manager', 'users', 'read', TRUE),
+          ('role_manager', 'users', 'update', TRUE),
+          ('role_manager', 'tasks', '*', TRUE),
+          ('role_manager', 'messaging', 'create_channel', TRUE),
+          ('role_employee', 'organizations', 'read', TRUE),
+          ('role_employee', 'users', 'read', TRUE),
+          ('role_employee', 'messaging', 'send_message', TRUE),
+          ('role_employee', 'tasks', 'create_task', TRUE),
           ('role_org_user', 'organizations', 'read', TRUE),
           ('role_org_user', 'users', 'read', TRUE),
           ('role_org_user', 'messaging', 'send_message', TRUE),

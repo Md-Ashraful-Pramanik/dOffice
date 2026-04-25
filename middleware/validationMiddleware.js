@@ -7,7 +7,7 @@ function validateRegisterPayload(req, res, next) {
 
   const { username, email, password } = user;
 
-  if (!username || !email || !password) {
+  if (!isNonEmptyString(username) || !isNonEmptyString(email) || !isNonEmptyString(password)) {
     return res.status(422).json({ errors: { body: ["required fields: username, email, password"] } });
   }
 
