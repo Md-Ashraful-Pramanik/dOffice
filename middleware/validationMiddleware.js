@@ -867,6 +867,14 @@ function validateCreateChannelPayload(req, res, next) {
     return res.status(422).json({ errors: { type: ["is invalid"] } });
   }
 
+  if (channel.type !== "private" && Object.prototype.hasOwnProperty.call(channel, "memberIds")) {
+    return res.status(422).json({ errors: { memberIds: ["is only supported for private channels"] } });
+  }
+
+  if (channel.type !== "private" && Object.prototype.hasOwnProperty.call(channel, "e2ee")) {
+    return res.status(422).json({ errors: { e2ee: ["is only supported for private channels"] } });
+  }
+
   if (channel.description !== undefined && !isNullableString(channel.description)) {
     return res.status(422).json({ errors: { description: ["must be a string or null"] } });
   }

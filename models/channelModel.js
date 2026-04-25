@@ -279,6 +279,23 @@ async function findMembership(channelId, userId, client = db) {
   return result.rows[0] || null;
 }
 
+async function listActiveMembershipsByUserIds(channelId, userIds = [], client = db) {
+  if (!Array.isArray(userIds) || !userIds.length) {
+    return [];
+  }
+
+  const result = await client.query(
+    `SELECT channel_id, user_id, role, invited_by, joined_at, created_at, updated_at
+     FROM doffice_channel_members
+     WHERE channel_id = $1::varchar(64)
+       AND user_id = ANY($2::varchar(64)[])
+       AND deleted_at IS NULL`,
+    [channelId, userIds]
+  );
+
+  return result.rows;
+}
+
 async function upsertChannelMember(payload, client = db) {
   const { channelId, userId, role, invitedBy } = payload;
 
@@ -459,6 +476,7 @@ module.exports = {
   updateChannel,
   softDeleteChannel,
   findMembership,
+  listActiveMembershipsByUserIds,
   upsertChannelMember,
   softRemoveMember,
   softDeleteAllMembers,

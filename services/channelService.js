@@ -170,7 +170,7 @@ function isChannelAdmin(membership) {
 }
 
 function canInviteToChannel(membership) {
-  return Boolean(isChannelAdmin(membership));
+  return Boolean(membership && (membership.role === "admin" || membership.role === "moderator"));
 }
 
 function assertChannelVisibility(channel, membership) {
@@ -286,16 +286,18 @@ async function createChannel(authUser, orgId, payload) {
 
     const name = normalizeRequiredString(channelPayload.name, "name");
     const type = normalizeChannelType(channelPayload.type);
+    const hasMemberIds = Object.prototype.hasOwnProperty.call(channelPayload, "memberIds");
     const memberIds = Object.prototype.hasOwnProperty.call(channelPayload, "memberIds")
       ? await assertUsersEligibleForChannel(channelPayload.memberIds, orgId, type, client)
       : [];
 
-    if (type !== "private") {
-      assert(!memberIds.length, "memberIds is only supported for private channels.", 422);
+    if (hasMemberIds) {
+      assert(type === "private", "memberIds is only supported for private channels.", 422);
     }
 
-    const e2ee = Boolean(channelPayload.e2ee);
-    if (e2ee) {
+    const hasE2ee = Object.prototype.hasOwnProperty.call(channelPayload, "e2ee");
+    const e2ee = hasE2ee ? Boolean(channelPayload.e2ee) : false;
+    if (hasE2ee) {
       assert(type === "private", "e2ee is only supported for private channels.", 422);
     }
 
@@ -451,8 +453,9 @@ async function joinChannel(authUser, channelId) {
   try {
     await client.query("BEGIN");
 
-    const { channel } = await getChannelContext(authUser, channelId, client);
+    const { channel, membership } = await getChannelContext(authUser, channelId, client);
     assert(channel.type === "public", "Only public channels can be joined directly.", 422);
+    assert(!membership, "You have already joined this channel.", 422);
 
     await channelModel.upsertChannelMember(
       {
@@ -511,6 +514,13 @@ async function inviteToChannel(authUser, channelId, payload) {
 
     const userIds = await assertUsersEligibleForChannel(payload?.userIds, channel.org_id, channel.type, client);
     assert(userIds.length > 0, "userIds must be a non-empty array of user IDs.", 422);
+
+    const existingMemberships = await channelModel.listActiveMembershipsByUserIds(channelId, userIds, client);
+    assert(
+      !existingMemberships.length,
+      `One or more users are already members of this channel: ${existingMemberships.map((item) => item.user_id).join(", ")}.`,
+      422
+    );
 
     for (const userId of userIds) {
       await channelModel.upsertChannelMember(
