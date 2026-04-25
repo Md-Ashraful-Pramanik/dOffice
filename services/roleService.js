@@ -17,6 +17,24 @@ const PERMISSION_CATALOG = {
   tasks: ["create_project", "delete_project", "create_task", "assign_task", "delete_task", "manage_sprint"],
 };
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeRequiredString(value, fieldName) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  assert(normalized, `${fieldName} is required.`, 422);
+  return normalized;
+}
+
+function normalizeNullableString(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  return String(value).trim() || null;
+}
+
 function normalizePermission(permission) {
   return {
     module: String(permission.module || "").trim().toLowerCase(),
@@ -41,6 +59,47 @@ function normalizeOptionalId(value) {
 
   const normalized = String(value).trim();
   return normalized || null;
+}
+
+function validatePermissionEntries(permissions, message, requireAtLeastOne = false) {
+  assert(Array.isArray(permissions), message, 422);
+  if (requireAtLeastOne) {
+    assert(permissions.length > 0, message, 422);
+  }
+
+  permissions.forEach((permission) => {
+    assert(isPlainObject(permission), message, 422);
+    const normalized = normalizePermission(permission);
+    assert(normalized.module, message, 422);
+    assert(normalized.action, message, 422);
+    assert(typeof permission.allow === "boolean", message, 422);
+  });
+}
+
+async function assertValidInheritance(orgId, roleId, inheritsFrom, client) {
+  if (!inheritsFrom) {
+    return;
+  }
+
+  assert(inheritsFrom !== roleId, "A role cannot inherit from itself.", 422);
+
+  const visited = new Set([roleId]);
+  let currentRoleId = inheritsFrom;
+
+  while (currentRoleId) {
+    assert(!visited.has(currentRoleId), "Role inheritance cycle detected.", 422);
+    visited.add(currentRoleId);
+
+    const inheritedRole = await roleModel.findRoleById(currentRoleId, orgId, client);
+    assert(inheritedRole, "Resource not found.", 404);
+
+    currentRoleId = inheritedRole.inherits_from || null;
+  }
+}
+
+async function getSerializedRole(role, client = db) {
+  const permissions = await roleModel.listEffectiveRolePermissions([role.id], role.org_id, client);
+  return serializeRole(role, permissions);
 }
 
 function serializeRole(role, permissions) {
@@ -119,8 +178,7 @@ async function getRole(authUser, orgId, roleId) {
   const role = await roleModel.findRoleById(roleId, orgId);
   assert(role, "Resource not found.", 404);
 
-  const permissions = await roleModel.listRolePermissions([role.id]);
-  return serializeRole(role, permissions);
+  return getSerializedRole(role);
 }
 
 async function createRole(authUser, orgId, payload) {
@@ -135,20 +193,20 @@ async function createRole(authUser, orgId, payload) {
     await assertOrganizationExists(orgId, client);
     assertOrgAccess(orgId, accessContext);
 
-    const rolePayload = payload.role || {};
+    const rolePayload = isPlainObject(payload?.role) ? payload.role : {};
+    validatePermissionEntries(rolePayload.permissions, "permissions must be a non-empty list of permissions", true);
+
     const roleId = generateId("role");
+    const name = normalizeRequiredString(rolePayload.name, "name");
 
     const inheritsFrom = normalizeOptionalId(rolePayload.inheritsFrom);
-    if (inheritsFrom) {
-      const inheritedRole = await roleModel.findRoleById(inheritsFrom, orgId, client);
-      assert(inheritedRole, "Resource not found.", 404);
-    }
+    await assertValidInheritance(orgId, roleId, inheritsFrom, client);
 
     await roleModel.createRole(
       {
         id: roleId,
-        name: rolePayload.name.trim(),
-        description: rolePayload.description || null,
+        name,
+        description: normalizeNullableString(rolePayload.description),
         type: "custom",
         inheritsFrom,
         orgId,
@@ -157,14 +215,13 @@ async function createRole(authUser, orgId, payload) {
       client
     );
 
-    const permissions = dedupePermissions((rolePayload.permissions || []).map(normalizePermission));
+    const permissions = dedupePermissions(rolePayload.permissions.map(normalizePermission));
     await roleModel.replaceRolePermissions(roleId, permissions, client);
 
     const role = await roleModel.findRoleById(roleId, orgId, client);
-    const rolePermissions = await roleModel.listRolePermissions([roleId], client);
 
     await client.query("COMMIT");
-    return serializeRole(role, rolePermissions);
+    return getSerializedRole(role);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -187,7 +244,8 @@ async function updateRole(authUser, orgId, roleId, payload) {
     const existing = await roleModel.findRoleById(roleId, orgId, client);
     assert(existing, "Resource not found.", 404);
 
-    const updates = payload.role || {};
+    const updates = isPlainObject(payload?.role) ? payload.role : {};
+    assert(Object.keys(updates).length > 0, "At least one updatable field is required.", 422);
 
     if (Object.prototype.hasOwnProperty.call(updates, "name") ||
       Object.prototype.hasOwnProperty.call(updates, "description") ||
@@ -196,16 +254,19 @@ async function updateRole(authUser, orgId, roleId, payload) {
         ? normalizeOptionalId(updates.inheritsFrom)
         : undefined;
 
-      if (Object.prototype.hasOwnProperty.call(updates, "inheritsFrom") && inheritsFrom) {
-        const inheritedRole = await roleModel.findRoleById(inheritsFrom, orgId, client);
-        assert(inheritedRole, "Resource not found.", 404);
+      if (Object.prototype.hasOwnProperty.call(updates, "inheritsFrom")) {
+        await assertValidInheritance(orgId, roleId, inheritsFrom, client);
       }
 
       await roleModel.updateRole(
         roleId,
         {
-          ...(Object.prototype.hasOwnProperty.call(updates, "name") ? { name: updates.name.trim() } : {}),
-          ...(Object.prototype.hasOwnProperty.call(updates, "description") ? { description: updates.description || null } : {}),
+          ...(Object.prototype.hasOwnProperty.call(updates, "name")
+            ? { name: normalizeRequiredString(updates.name, "name") }
+            : {}),
+          ...(Object.prototype.hasOwnProperty.call(updates, "description")
+            ? { description: normalizeNullableString(updates.description) }
+            : {}),
           ...(Object.prototype.hasOwnProperty.call(updates, "inheritsFrom") ? { inheritsFrom } : {}),
         },
         client
@@ -213,15 +274,15 @@ async function updateRole(authUser, orgId, roleId, payload) {
     }
 
     if (Object.prototype.hasOwnProperty.call(updates, "permissions")) {
+      validatePermissionEntries(updates.permissions, "permissions must be a list of permissions");
       const permissions = dedupePermissions((updates.permissions || []).map(normalizePermission));
       await roleModel.replaceRolePermissions(roleId, permissions, client);
     }
 
     const role = await roleModel.findRoleById(roleId, orgId, client);
-    const permissions = await roleModel.listRolePermissions([roleId], client);
 
     await client.query("COMMIT");
-    return serializeRole(role, permissions);
+    return getSerializedRole(role);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -352,7 +413,7 @@ async function getEffectivePermissions(authUser, userId, orgId) {
 
     const assignments = await roleModel.listUserRoleAssignments(userId, targetOrgId, client);
     const roleIds = assignments.map((item) => item.role_id);
-    const rolePermissions = await roleModel.listRolePermissions(roleIds, client);
+    const rolePermissions = await roleModel.listEffectiveRolePermissions(roleIds, targetOrgId, client);
 
     const teamOverrides = await teamModel.listUserTeamOverrides(userId, targetOrgId, client);
 

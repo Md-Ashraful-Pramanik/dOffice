@@ -146,6 +146,49 @@ async function listRolePermissions(roleIds = [], client = db) {
   return result.rows;
 }
 
+async function listEffectiveRolePermissions(roleIds = [], orgId = null, client = db) {
+  if (!roleIds.length) {
+    return [];
+  }
+
+  const result = await client.query(
+    `WITH RECURSIVE role_tree AS (
+      SELECT r.id,
+             r.inherits_from,
+             r.id AS root_role_id,
+             0 AS depth
+      FROM doffice_roles r
+      WHERE r.id = ANY($1::varchar[])
+        AND r.deleted_at IS NULL
+        AND ($2::varchar IS NULL OR r.org_id = $2 OR r.org_id IS NULL)
+
+      UNION ALL
+
+      SELECT parent.id,
+             parent.inherits_from,
+             role_tree.root_role_id,
+             role_tree.depth + 1 AS depth
+      FROM doffice_roles parent
+      INNER JOIN role_tree ON parent.id = role_tree.inherits_from
+      WHERE parent.deleted_at IS NULL
+        AND role_tree.depth < 20
+    )
+    SELECT DISTINCT ON (role_tree.root_role_id, rp.module, rp.action)
+      role_tree.root_role_id AS role_id,
+      rp.module,
+      rp.action,
+      rp.allow,
+      role_tree.depth
+    FROM role_tree
+    INNER JOIN doffice_role_permissions rp ON rp.role_id = role_tree.id
+    WHERE rp.deleted_at IS NULL
+    ORDER BY role_tree.root_role_id ASC, rp.module ASC, rp.action ASC, role_tree.depth ASC`,
+    [roleIds, orgId]
+  );
+
+  return result.rows;
+}
+
 async function replaceRolePermissions(roleId, permissions, client = db) {
   await client.query(
     `UPDATE doffice_role_permissions
@@ -248,6 +291,7 @@ module.exports = {
   updateRole,
   softDeleteRole,
   listRolePermissions,
+  listEffectiveRolePermissions,
   replaceRolePermissions,
   listUserRoleAssignments,
   assignRoleToUser,

@@ -374,6 +374,46 @@ async function runMigrations() {
     `);
 
     await client.query(`
+      ALTER TABLE doffice_teams
+      ADD COLUMN IF NOT EXISTS description TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_teams
+      ADD COLUMN IF NOT EXISTS type VARCHAR(32) NOT NULL DEFAULT 'static';
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_teams
+      ADD COLUMN IF NOT EXISTS dynamic_filter JSONB;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_teams
+      ADD COLUMN IF NOT EXISTS created_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_teams
+      ADD COLUMN IF NOT EXISTS deleted_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_teams
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_teams
+      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_teams
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    `);
+
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_doffice_teams_org_id
       ON doffice_teams(org_id)
       WHERE deleted_at IS NULL;
@@ -394,6 +434,21 @@ async function runMigrations() {
         deleted_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_team_members
+      ADD COLUMN IF NOT EXISTS added_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_team_members
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_team_members
+      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
     `);
 
     await client.query(`
@@ -422,6 +477,32 @@ async function runMigrations() {
     `);
 
     await client.query(`
+      ALTER TABLE doffice_team_permission_overrides
+      ADD COLUMN IF NOT EXISTS allow BOOLEAN NOT NULL DEFAULT TRUE;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_team_permission_overrides
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_team_permission_overrides
+      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_team_permission_overrides
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_team_permission_overrides_team_id
+      ON doffice_team_permission_overrides(team_id)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS uq_doffice_team_permission_overrides_active
       ON doffice_team_permission_overrides(team_id, module, action)
       WHERE deleted_at IS NULL;
@@ -444,6 +525,76 @@ async function runMigrations() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         CONSTRAINT doffice_delegations_date_check CHECK (end_date >= start_date)
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_delegations
+      ADD COLUMN IF NOT EXISTS reason TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_delegations
+      ADD COLUMN IF NOT EXISTS status VARCHAR(32) NOT NULL DEFAULT 'active';
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_delegations
+      ADD COLUMN IF NOT EXISTS scope JSONB NOT NULL DEFAULT '{}'::jsonb;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_delegations
+      ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_delegations
+      ADD COLUMN IF NOT EXISTS revoked_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_delegations
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_delegations
+      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_delegations
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_teams_type_check'
+        ) THEN
+          ALTER TABLE doffice_teams
+          ADD CONSTRAINT doffice_teams_type_check
+          CHECK (type IN ('static', 'dynamic'));
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_delegations_status_check'
+        ) THEN
+          ALTER TABLE doffice_delegations
+          ADD CONSTRAINT doffice_delegations_status_check
+          CHECK (status IN ('active', 'expired', 'revoked'));
+        END IF;
+      END $$;
     `);
 
     await client.query(`

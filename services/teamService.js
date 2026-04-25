@@ -35,6 +35,24 @@ function serializeTeam(team, members = [], overrides = []) {
   };
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeRequiredString(value, fieldName) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  assert(normalized, `${fieldName} is required.`, 422);
+  return normalized;
+}
+
+function normalizeNullableString(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  return String(value).trim() || null;
+}
+
 function normalizeOverride(override) {
   return {
     module: String(override.module || "").trim().toLowerCase(),
@@ -49,6 +67,26 @@ function dedupeOverrides(overrides = []) {
     map.set(`${override.module}:${override.action}`, override);
   });
   return Array.from(map.values());
+}
+
+function validateOverrideEntries(overrides, message) {
+  assert(Array.isArray(overrides), message, 422);
+
+  overrides.forEach((override) => {
+    assert(isPlainObject(override), message, 422);
+    const normalized = normalizeOverride(override);
+    assert(normalized.module, message, 422);
+    assert(normalized.action, message, 422);
+    assert(typeof override.allow === "boolean", message, 422);
+  });
+}
+
+function validateDynamicFilter(value) {
+  assert(isPlainObject(value), "dynamicFilter must be an object.", 422);
+  const invalidEntry = Object.values(value).some(
+    (entry) => entry !== null && entry !== undefined && typeof entry !== "string"
+  );
+  assert(!invalidEntry, "dynamicFilter values must be strings.", 422);
 }
 
 function parseNonNegativeInt(value, fallback) {
@@ -114,8 +152,9 @@ async function createTeam(authUser, orgId, payload) {
     await client.query("BEGIN");
 
     const accessContext = await getAccessContext(authUser, client);
-    const teamPayload = payload.team || {};
+    const teamPayload = isPlainObject(payload?.team) ? payload.team : {};
     const teamType = teamPayload.type || "static";
+    const name = normalizeRequiredString(teamPayload.name, "name");
 
     const requiresOrgAdmin = teamType === "dynamic";
     if (requiresOrgAdmin) {
@@ -128,11 +167,16 @@ async function createTeam(authUser, orgId, payload) {
     assertOrgAccess(orgId, accessContext);
 
     if (teamType === "dynamic") {
-      assert(
-        teamPayload.dynamicFilter && typeof teamPayload.dynamicFilter === "object" && !Array.isArray(teamPayload.dynamicFilter),
-        "dynamicFilter is required for dynamic teams.",
-        422
-      );
+      validateDynamicFilter(teamPayload.dynamicFilter);
+      assert(!Array.isArray(teamPayload.memberIds) || teamPayload.memberIds.length === 0, "Dynamic teams compute members automatically.", 422);
+    }
+
+    if (Array.isArray(teamPayload.permissionOverrides)) {
+      validateOverrideEntries(teamPayload.permissionOverrides, "permissionOverrides must be a valid permission list");
+    }
+
+    if (teamPayload.dynamicFilter !== undefined && teamPayload.dynamicFilter !== null) {
+      validateDynamicFilter(teamPayload.dynamicFilter);
     }
 
     const teamId = generateId("team");
@@ -140,8 +184,8 @@ async function createTeam(authUser, orgId, payload) {
       {
         id: teamId,
         orgId,
-        name: teamPayload.name.trim(),
-        description: teamPayload.description || null,
+        name,
+        description: normalizeNullableString(teamPayload.description),
         type: teamType,
         dynamicFilter: teamPayload.dynamicFilter || null,
         createdBy: authUser.id,
@@ -192,12 +236,27 @@ async function updateTeam(authUser, orgId, teamId, payload) {
     const isTeamLead = team.created_by === authUser.id;
     assert(accessContext.isOrgAdmin || isTeamLead, "You do not have permission to perform this action.", 403);
 
-    const updates = payload.team || {};
+    const updates = isPlainObject(payload?.team) ? payload.team : {};
+    assert(Object.keys(updates).length > 0, "At least one updatable field is required.", 422);
+
+    if (Object.prototype.hasOwnProperty.call(updates, "permissionOverrides")) {
+      validateOverrideEntries(updates.permissionOverrides, "permissionOverrides must be a valid permission list");
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, "dynamicFilter")) {
+      assert(team.type === "dynamic", "Only dynamic teams can update dynamicFilter.", 422);
+      validateDynamicFilter(updates.dynamicFilter);
+    }
+
     await teamModel.updateTeam(
       teamId,
       {
-        ...(Object.prototype.hasOwnProperty.call(updates, "name") ? { name: updates.name.trim() } : {}),
-        ...(Object.prototype.hasOwnProperty.call(updates, "description") ? { description: updates.description || null } : {}),
+        ...(Object.prototype.hasOwnProperty.call(updates, "name")
+          ? { name: normalizeRequiredString(updates.name, "name") }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(updates, "description")
+          ? { description: normalizeNullableString(updates.description) }
+          : {}),
         ...(Object.prototype.hasOwnProperty.call(updates, "dynamicFilter") ? { dynamicFilter: updates.dynamicFilter || null } : {}),
       },
       client
