@@ -10,6 +10,7 @@ const {
   validateInviteChannelMembersPayload,
   validateListChannelMembersQuery,
   validateSetChannelMemberRolePayload,
+  validateListCategoriesQuery,
   validateCreateCategoryPayload,
   validateUpdateCategoryPayload,
   validateReorderCategoriesPayload,
@@ -92,6 +93,7 @@ router.delete(
 router.get(
   "/organizations/:orgId/channel-categories",
   requireAuth,
+  validateListCategoriesQuery,
   channelCategoryController.listCategories
 );
 

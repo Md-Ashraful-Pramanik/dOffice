@@ -18,6 +18,15 @@ function toCategoryResponse(row) {
   };
 }
 
+function toCategoryListItem(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    position: Number(row.position || 0),
+    channelCount: Number(row.channel_count || 0),
+  };
+}
+
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -87,7 +96,7 @@ async function listCategories(authUser, orgId) {
 
   const categories = await channelCategoryModel.listCategories(orgId);
   return {
-    categories: categories.map(toCategoryResponse),
+    categories: categories.map(toCategoryListItem),
   };
 }
 
@@ -104,6 +113,11 @@ async function createCategory(authUser, orgId, payload) {
 
     const categoryPayload = isPlainObject(payload?.category) ? payload.category : null;
     assert(categoryPayload, "category is required.", 422);
+    assert(
+      Object.keys(categoryPayload).every((key) => ["name", "position"].includes(key)),
+      "category contains invalid fields.",
+      422
+    );
 
     const categories = await channelCategoryModel.listCategories(orgId, client);
     const categoryId = generateId("cat");
@@ -158,6 +172,11 @@ async function updateCategory(authUser, orgId, categoryId, payload) {
 
     const categoryPayload = isPlainObject(payload?.category) ? payload.category : null;
     assert(categoryPayload, "category is required.", 422);
+    assert(
+      Object.keys(categoryPayload).every((key) => ["name", "position"].includes(key)),
+      "category contains invalid fields.",
+      422
+    );
 
     const category = await channelCategoryModel.findById(categoryId, orgId, client);
     assert(category, "Resource not found.", 404);
@@ -241,6 +260,12 @@ async function reorderCategories(authUser, orgId, payload) {
     await assertOrganizationExists(orgId, client);
     assertOrgAccess(orgId, accessContext);
 
+    assert(
+      isPlainObject(payload) && Object.keys(payload).every((key) => ["order"].includes(key)),
+      "order payload contains invalid fields.",
+      422
+    );
+
     const order = Array.isArray(payload?.order) ? payload.order.map((item) => normalizeOptionalString(item)).filter(Boolean) : null;
     assert(order, "order must be an array of category IDs.", 422);
 
@@ -248,19 +273,19 @@ async function reorderCategories(authUser, orgId, payload) {
     const availableIds = new Set(categories.map((category) => category.id));
     const duplicateCount = new Set(order).size !== order.length;
     assert(!duplicateCount, "order cannot contain duplicate category IDs.", 422);
+    assert(order.length === categories.length, "order must include every active category exactly once.", 422);
 
     order.forEach((categoryId) => {
       assert(availableIds.has(categoryId), "order contains category IDs outside the organization.", 422);
     });
 
-    const orderedIds = buildOrderedIds(categories, order);
-    await channelCategoryModel.setCategoryPositions(orgId, orderedIds, client);
+    await channelCategoryModel.setCategoryPositions(orgId, order, client);
 
     const updated = await channelCategoryModel.listCategories(orgId, client);
     await client.query("COMMIT");
 
     return {
-      categories: updated.map(toCategoryResponse),
+      categories: updated.map(toCategoryListItem),
     };
   } catch (error) {
     await client.query("ROLLBACK");

@@ -65,6 +65,45 @@ function parseNonNegativeInteger(value) {
   return parsed;
 }
 
+function getUnknownKeys(value, allowedKeys = []) {
+  if (!isPlainObject(value)) {
+    return [];
+  }
+
+  const allowed = new Set(allowedKeys);
+  return Object.keys(value).filter((key) => !allowed.has(key));
+}
+
+function rejectUnknownPayloadFields(res, value, allowedKeys = []) {
+  const unknownKeys = getUnknownKeys(value, allowedKeys);
+  if (!unknownKeys.length) {
+    return false;
+  }
+
+  res.status(422).json({
+    errors: {
+      body: [`contains invalid field(s): ${unknownKeys.join(", ")}`],
+    },
+  });
+
+  return true;
+}
+
+function rejectUnknownQueryParams(res, query, allowedKeys = []) {
+  const unknownKeys = Object.keys(query || {}).filter((key) => !allowedKeys.includes(key));
+  if (!unknownKeys.length) {
+    return false;
+  }
+
+  res.status(422).json({
+    errors: {
+      query: [`contains invalid parameter(s): ${unknownKeys.join(", ")}`],
+    },
+  });
+
+  return true;
+}
+
 function validateListOrganizationsQuery(req, res, next) {
   const validStatuses = new Set(["active", "archived", "deactivated"]);
   const { search, status, parentId, limit, offset } = req.query || {};
@@ -777,6 +816,10 @@ function validateListChannelsQuery(req, res, next) {
   const { search, type, categoryId, joined, limit, offset } = req.query || {};
   const validTypes = new Set(["public", "private", "announcement", "cross-org"]);
 
+  if (rejectUnknownQueryParams(res, req.query, ["search", "type", "categoryId", "joined", "limit", "offset"])) {
+    return;
+  }
+
   if (search !== undefined && typeof search !== "string") {
     return res.status(422).json({ errors: { search: ["must be a string"] } });
   }
@@ -810,6 +853,10 @@ function validateCreateChannelPayload(req, res, next) {
 
   if (!isPlainObject(channel)) {
     return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  if (rejectUnknownPayloadFields(res, channel, ["name", "type", "description", "categoryId", "topic", "memberIds", "e2ee"])) {
+    return;
   }
 
   if (!isNonEmptyString(channel.name) || !isNonEmptyString(channel.type)) {
@@ -854,6 +901,10 @@ function validateUpdateChannelPayload(req, res, next) {
   }
 
   const allowedFields = ["name", "description", "topic", "categoryId", "type"];
+  if (rejectUnknownPayloadFields(res, channel, allowedFields)) {
+    return;
+  }
+
   const hasAllowedField = allowedFields.some((field) => Object.prototype.hasOwnProperty.call(channel, field));
   if (!hasAllowedField) {
     return res.status(422).json({ errors: { body: ["at least one updatable field is required"] } });
@@ -885,6 +936,10 @@ function validateUpdateChannelPayload(req, res, next) {
 function validateInviteChannelMembersPayload(req, res, next) {
   const { userIds } = req.body || {};
 
+  if (rejectUnknownPayloadFields(res, req.body || {}, ["userIds"])) {
+    return;
+  }
+
   if (!Array.isArray(userIds) || !userIds.length || !userIds.every(isNonEmptyString)) {
     return res.status(422).json({ errors: { userIds: ["must be a non-empty array of user IDs"] } });
   }
@@ -895,6 +950,10 @@ function validateInviteChannelMembersPayload(req, res, next) {
 function validateListChannelMembersQuery(req, res, next) {
   const { search, role, limit, offset } = req.query || {};
   const validRoles = new Set(["admin", "moderator", "member"]);
+
+  if (rejectUnknownQueryParams(res, req.query, ["search", "role", "limit", "offset"])) {
+    return;
+  }
 
   if (search !== undefined && typeof search !== "string") {
     return res.status(422).json({ errors: { search: ["must be a string"] } });
@@ -919,8 +978,20 @@ function validateSetChannelMemberRolePayload(req, res, next) {
   const { role } = req.body || {};
   const validRoles = new Set(["admin", "moderator", "member"]);
 
+  if (rejectUnknownPayloadFields(res, req.body || {}, ["role"])) {
+    return;
+  }
+
   if (!isNonEmptyString(role) || !validRoles.has(role)) {
     return res.status(422).json({ errors: { role: ["must be admin, moderator, or member"] } });
+  }
+
+  next();
+}
+
+function validateListCategoriesQuery(req, res, next) {
+  if (rejectUnknownQueryParams(res, req.query, [])) {
+    return;
   }
 
   next();
@@ -931,6 +1002,10 @@ function validateCreateCategoryPayload(req, res, next) {
 
   if (!isPlainObject(category)) {
     return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  if (rejectUnknownPayloadFields(res, category, ["name", "position"])) {
+    return;
   }
 
   if (!isNonEmptyString(category.name)) {
@@ -949,6 +1024,10 @@ function validateUpdateCategoryPayload(req, res, next) {
 
   if (!isPlainObject(category)) {
     return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  if (rejectUnknownPayloadFields(res, category, ["name", "position"])) {
+    return;
   }
 
   const hasUpdatableField = Object.prototype.hasOwnProperty.call(category, "name")
@@ -970,6 +1049,10 @@ function validateUpdateCategoryPayload(req, res, next) {
 
 function validateReorderCategoriesPayload(req, res, next) {
   const { order } = req.body || {};
+
+  if (rejectUnknownPayloadFields(res, req.body || {}, ["order"])) {
+    return;
+  }
 
   if (!Array.isArray(order) || !order.every(isNonEmptyString)) {
     return res.status(422).json({ errors: { order: ["must be an array of category IDs"] } });
@@ -1011,6 +1094,7 @@ module.exports = {
   validateInviteChannelMembersPayload,
   validateListChannelMembersQuery,
   validateSetChannelMemberRolePayload,
+  validateListCategoriesQuery,
   validateCreateCategoryPayload,
   validateUpdateCategoryPayload,
   validateReorderCategoriesPayload,

@@ -82,11 +82,7 @@ async function listChannels(orgId, filters = {}, client = db) {
 
   if (search) {
     params.push(`%${search}%`);
-    where.push(`(
-      c.name ILIKE $${params.length}
-      OR COALESCE(c.description, '') ILIKE $${params.length}
-      OR COALESCE(c.topic, '') ILIKE $${params.length}
-    )`);
+    where.push(`c.name ILIKE $${params.length}`);
   }
 
   if (type) {

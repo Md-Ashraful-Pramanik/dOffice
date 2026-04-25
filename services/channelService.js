@@ -12,6 +12,8 @@ const {
 
 const CHANNEL_TYPES = new Set(["public", "private", "announcement", "cross-org"]);
 const MEMBER_ROLES = new Set(["admin", "moderator", "member"]);
+const CREATE_CHANNEL_FIELDS = ["name", "type", "description", "categoryId", "topic", "memberIds", "e2ee"];
+const UPDATE_CHANNEL_FIELDS = ["name", "description", "topic", "categoryId", "type"];
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -91,6 +93,14 @@ function normalizeDistinctUserIds(userIds = []) {
   return normalized;
 }
 
+function assertAllowedKeys(value, allowedKeys, messagePrefix) {
+  assert(isPlainObject(value), messagePrefix, 422);
+
+  const allowed = new Set(allowedKeys);
+  const invalidKeys = Object.keys(value).filter((key) => !allowed.has(key));
+  assert(!invalidKeys.length, `${messagePrefix} Invalid fields: ${invalidKeys.join(", ")}.`, 422);
+}
+
 function toChannel(row) {
   return {
     id: row.id,
@@ -129,7 +139,6 @@ function toMemberUser(row) {
     department: row.department,
     avatar: row.avatar,
     status: row.status,
-    channelRole: row.channel_role,
   };
 }
 
@@ -156,25 +165,20 @@ function canManageChannel(accessContext, membership) {
   return Boolean(accessContext.isOrgAdmin || accessContext.isSuperAdmin || membership?.role === "admin");
 }
 
-function canInviteToChannel(accessContext, membership) {
-  return Boolean(
-    accessContext.isOrgAdmin
-    || accessContext.isSuperAdmin
-    || membership?.role === "admin"
-    || membership?.role === "moderator"
-  );
+function isChannelAdmin(membership) {
+  return membership?.role === "admin";
 }
 
-function assertChannelVisibility(channel, accessContext, membership) {
+function canInviteToChannel(membership) {
+  return Boolean(isChannelAdmin(membership));
+}
+
+function assertChannelVisibility(channel, membership) {
   if (channel.type !== "private") {
     return;
   }
 
-  assert(
-    accessContext.isOrgAdmin || accessContext.isSuperAdmin || membership,
-    "You do not have permission to perform this action.",
-    403
-  );
+  assert(membership, "You do not have permission to perform this action.", 403);
 }
 
 async function assertCategoryInOrg(categoryId, orgId, client) {
@@ -244,7 +248,7 @@ async function listChannels(authUser, orgId, query) {
     categoryId: normalizeOptionalString(query.categoryId),
     joined,
     userId: authUser.id,
-    bypassPrivateRestriction: accessContext.isOrgAdmin || accessContext.isSuperAdmin,
+    bypassPrivateRestriction: false,
     limit,
     offset,
   });
@@ -258,8 +262,8 @@ async function listChannels(authUser, orgId, query) {
 }
 
 async function getChannel(authUser, channelId) {
-  const { accessContext, channel, membership } = await getChannelContext(authUser, channelId);
-  assertChannelVisibility(channel, accessContext, membership);
+  const { channel, membership } = await getChannelContext(authUser, channelId);
+  assertChannelVisibility(channel, membership);
 
   return {
     channel: toChannel(channel),
@@ -278,6 +282,7 @@ async function createChannel(authUser, orgId, payload) {
 
     const channelPayload = isPlainObject(payload?.channel) ? payload.channel : null;
     assert(channelPayload, "channel is required.", 422);
+    assertAllowedKeys(channelPayload, CREATE_CHANNEL_FIELDS, "channel contains invalid fields.");
 
     const name = normalizeRequiredString(channelPayload.name, "name");
     const type = normalizeChannelType(channelPayload.type);
@@ -370,6 +375,7 @@ async function updateChannel(authUser, channelId, payload) {
 
     const channelPayload = isPlainObject(payload?.channel) ? payload.channel : null;
     assert(channelPayload, "channel is required.", 422);
+    assertAllowedKeys(channelPayload, UPDATE_CHANNEL_FIELDS, "channel contains invalid fields.");
 
     const updates = {};
     if (Object.prototype.hasOwnProperty.call(channelPayload, "name")) {
@@ -499,8 +505,9 @@ async function inviteToChannel(authUser, channelId, payload) {
   try {
     await client.query("BEGIN");
 
-    const { accessContext, channel, membership } = await getChannelContext(authUser, channelId, client);
-    assert(canInviteToChannel(accessContext, membership), "You do not have permission to perform this action.", 403);
+    const { channel, membership } = await getChannelContext(authUser, channelId, client);
+    assert(canInviteToChannel(membership), "You do not have permission to perform this action.", 403);
+    assertAllowedKeys(payload || {}, ["userIds"], "invite payload contains invalid fields.");
 
     const userIds = await assertUsersEligibleForChannel(payload?.userIds, channel.org_id, channel.type, client);
     assert(userIds.length > 0, "userIds must be a non-empty array of user IDs.", 422);
@@ -537,8 +544,8 @@ async function removeMember(authUser, channelId, userId) {
   try {
     await client.query("BEGIN");
 
-    const { accessContext, membership } = await getChannelContext(authUser, channelId, client);
-    assert(canManageChannel(accessContext, membership), "You do not have permission to perform this action.", 403);
+    const { membership } = await getChannelContext(authUser, channelId, client);
+    assert(isChannelAdmin(membership), "You do not have permission to perform this action.", 403);
 
     const targetMembership = await channelModel.findMembership(channelId, userId, client);
     assert(targetMembership, "Resource not found.", 404);
@@ -556,8 +563,8 @@ async function removeMember(authUser, channelId, userId) {
 }
 
 async function listChannelMembers(authUser, channelId, query) {
-  const { accessContext, channel, membership } = await getChannelContext(authUser, channelId);
-  assertChannelVisibility(channel, accessContext, membership);
+  const { channel, membership } = await getChannelContext(authUser, channelId);
+  assertChannelVisibility(channel, membership);
 
   const limit = parseNonNegativeInt(query.limit, 50, "limit");
   const offset = parseNonNegativeInt(query.offset, 0, "offset");
@@ -584,8 +591,9 @@ async function setChannelMemberRole(authUser, channelId, userId, payload) {
   try {
     await client.query("BEGIN");
 
-    const { accessContext, membership } = await getChannelContext(authUser, channelId, client);
-    assert(canManageChannel(accessContext, membership), "You do not have permission to perform this action.", 403);
+    const { membership } = await getChannelContext(authUser, channelId, client);
+    assert(isChannelAdmin(membership), "You do not have permission to perform this action.", 403);
+    assertAllowedKeys(payload || {}, ["role"], "member role payload contains invalid fields.");
 
     const role = normalizeMemberRole(payload?.role);
     const targetMembership = await channelModel.findMembership(channelId, userId, client);
