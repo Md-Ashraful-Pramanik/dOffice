@@ -73,7 +73,7 @@ async function findTeamById(teamId, orgId = null, client = db) {
   }
 
   const result = await client.query(
-    `SELECT t.id, t.org_id, t.name, t.description, t.type, t.dynamic_filter,
+    `SELECT t.id, t.org_id, t.name, t.description, t.type, t.dynamic_filter, t.created_by,
             t.created_at, t.updated_at
      FROM doffice_teams t
      WHERE ${where.join(" AND ")}

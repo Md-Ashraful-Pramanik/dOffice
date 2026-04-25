@@ -99,15 +99,38 @@ async function createUser(userPayload, client = db) {
 
 async function assignRole(userId, roleId, client = db) {
   await client.query(
-    `INSERT INTO doffice_user_roles (user_id, role_id)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id, role_id) DO NOTHING`,
+    `UPDATE doffice_user_roles
+     SET deleted_at = NULL,
+         created_at = NOW()
+     WHERE user_id = $1
+       AND role_id = $2
+       AND COALESCE(org_id, '__global__') = '__global__'`,
+    [userId, roleId]
+  );
+
+  await client.query(
+    `INSERT INTO doffice_user_roles (user_id, role_id, org_id)
+     SELECT $1, $2, NULL
+     WHERE NOT EXISTS (
+       SELECT 1
+       FROM doffice_user_roles
+       WHERE user_id = $1
+         AND role_id = $2
+         AND COALESCE(org_id, '__global__') = '__global__'
+         AND deleted_at IS NULL
+     )`,
     [userId, roleId]
   );
 }
 
 async function replaceUserRoles(userId, roleIds = [], client = db) {
-  await client.query(`DELETE FROM doffice_user_roles WHERE user_id = $1`, [userId]);
+  await client.query(
+    `UPDATE doffice_user_roles
+     SET deleted_at = NOW()
+     WHERE user_id = $1
+       AND deleted_at IS NULL`,
+    [userId]
+  );
 
   for (const roleId of roleIds) {
     await assignRole(userId, roleId, client);
@@ -117,8 +140,11 @@ async function replaceUserRoles(userId, roleIds = [], client = db) {
 async function getRoleIdsByUserId(userId, client = db) {
   const result = await client.query(
     `SELECT role_id
-    FROM doffice_user_roles
-     WHERE user_id = $1
+     FROM doffice_user_roles ur
+     INNER JOIN doffice_roles r ON r.id = ur.role_id
+     WHERE ur.user_id = $1
+       AND ur.deleted_at IS NULL
+       AND r.deleted_at IS NULL
      ORDER BY role_id ASC`,
     [userId]
   );

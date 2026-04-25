@@ -2,13 +2,17 @@ function validateRegisterPayload(req, res, next) {
   const user = req.body && req.body.user;
 
   if (!user || typeof user !== "object") {
-    return res.status(400).json({ error: "Invalid request body. Expected user object." });
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
   }
 
   const { username, email, password } = user;
 
   if (!username || !email || !password) {
-    return res.status(400).json({ error: "Required fields: username, email, password." });
+    return res.status(422).json({ errors: { body: ["required fields: username, email, password"] } });
+  }
+
+  if (!isValidEmail(email)) {
+    return res.status(422).json({ errors: { email: ["is invalid"] } });
   }
 
   next();
@@ -108,13 +112,13 @@ function validateLoginPayload(req, res, next) {
   const user = req.body && req.body.user;
 
   if (!user || typeof user !== "object") {
-    return res.status(400).json({ error: "Invalid request body. Expected user object." });
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
   }
 
   const { email, password } = user;
 
   if (!email || !password) {
-    return res.status(400).json({ error: "Required fields: email, password." });
+    return res.status(422).json({ errors: { body: ["required fields: email, password"] } });
   }
 
   next();

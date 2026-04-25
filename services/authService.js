@@ -72,7 +72,13 @@ async function createSessionForUser(userId, client = db) {
 }
 
 async function registerSuperAdmin(payload) {
-  const { username, email, password } = payload;
+  const { username, email, password } = payload || {};
+
+  if (!username || !email || !password) {
+    const error = new Error("Required fields: username, email, password.");
+    error.status = 422;
+    throw error;
+  }
 
   const client = await db.pool.connect();
   try {
@@ -122,7 +128,13 @@ async function registerSuperAdmin(payload) {
 }
 
 async function login(payload) {
-  const { email, password } = payload;
+  const { email, password } = payload || {};
+
+  if (!email || !password) {
+    const error = new Error("Required fields: email, password.");
+    error.status = 422;
+    throw error;
+  }
   const user = await userModel.findByEmail(email);
 
   if (!user) {

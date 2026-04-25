@@ -276,9 +276,12 @@ async function removeRoleFromUser(authUser, userId, roleId, orgId = null) {
 
     const user = await assertUserExists(userId, client);
     const scopeOrgId = orgId || user.org_id;
-    assert(scopeOrgId, "orgId is required.", 422);
-    await assertOrganizationExists(scopeOrgId, client);
-    assertOrgAccess(scopeOrgId, accessContext);
+    if (scopeOrgId) {
+      await assertOrganizationExists(scopeOrgId, client);
+      assertOrgAccess(scopeOrgId, accessContext);
+    } else {
+      assert(accessContext.isSuperAdmin, "You do not have permission to perform this action.", 403);
+    }
 
     const role = await roleModel.findRoleById(roleId, scopeOrgId, client);
     assert(role, "Resource not found.", 404);

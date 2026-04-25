@@ -166,13 +166,14 @@ async function updateTeam(authUser, orgId, teamId, payload) {
     await client.query("BEGIN");
 
     const accessContext = await getAccessContext(authUser, client);
-    assert(accessContext.isOrgAdmin || accessContext.isManager, "You do not have permission to perform this action.", 403);
 
     await assertOrganizationExists(orgId, client);
     assertOrgAccess(orgId, accessContext);
 
     const team = await teamModel.findTeamById(teamId, orgId, client);
     assert(team, "Resource not found.", 404);
+    const isTeamLead = team.created_by === authUser.id;
+    assert(accessContext.isOrgAdmin || isTeamLead, "You do not have permission to perform this action.", 403);
 
     const updates = payload.team || {};
     await teamModel.updateTeam(
@@ -237,13 +238,14 @@ async function addMembers(authUser, orgId, teamId, payload) {
     await client.query("BEGIN");
 
     const accessContext = await getAccessContext(authUser, client);
-    assert(accessContext.isOrgAdmin || accessContext.isManager, "You do not have permission to perform this action.", 403);
 
     await assertOrganizationExists(orgId, client);
     assertOrgAccess(orgId, accessContext);
 
     const team = await teamModel.findTeamById(teamId, orgId, client);
     assert(team, "Resource not found.", 404);
+    const isTeamLead = team.created_by === authUser.id;
+    assert(accessContext.isOrgAdmin || isTeamLead, "You do not have permission to perform this action.", 403);
     assert(team.type === "static", "Cannot manually add members to a dynamic team.", 422);
 
     const userIds = payload.userIds || [];
@@ -275,13 +277,14 @@ async function removeMember(authUser, orgId, teamId, userId) {
     await client.query("BEGIN");
 
     const accessContext = await getAccessContext(authUser, client);
-    assert(accessContext.isOrgAdmin || accessContext.isManager, "You do not have permission to perform this action.", 403);
 
     await assertOrganizationExists(orgId, client);
     assertOrgAccess(orgId, accessContext);
 
     const team = await teamModel.findTeamById(teamId, orgId, client);
     assert(team, "Resource not found.", 404);
+    const isTeamLead = team.created_by === authUser.id;
+    assert(accessContext.isOrgAdmin || isTeamLead, "You do not have permission to perform this action.", 403);
     assert(team.type === "static", "Cannot manually remove members from a dynamic team.", 422);
 
     const removed = await teamModel.softRemoveMember(team.id, userId, client);
