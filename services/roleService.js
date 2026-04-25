@@ -328,8 +328,7 @@ async function removeRoleFromUser(authUser, userId, roleId, orgId = null) {
 }
 
 async function listAllPermissions(authUser) {
-  const accessContext = await getAccessContext(authUser);
-  assert(accessContext.roleIds.length > 0 || accessContext.isSuperAdmin, "You do not have permission to perform this action.", 403);
+  await getAccessContext(authUser);
 
   return {
     permissions: PERMISSION_CATALOG,

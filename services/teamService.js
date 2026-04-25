@@ -43,6 +43,14 @@ function normalizeOverride(override) {
   };
 }
 
+function dedupeOverrides(overrides = []) {
+  const map = new Map();
+  overrides.forEach((override) => {
+    map.set(`${override.module}:${override.action}`, override);
+  });
+  return Array.from(map.values());
+}
+
 function parseNonNegativeInt(value, fallback) {
   if (value === undefined || value === null || value === "") {
     return fallback;
@@ -107,8 +115,9 @@ async function createTeam(authUser, orgId, payload) {
 
     const accessContext = await getAccessContext(authUser, client);
     const teamPayload = payload.team || {};
+    const teamType = teamPayload.type || "static";
 
-    const requiresOrgAdmin = teamPayload.type === "dynamic";
+    const requiresOrgAdmin = teamType === "dynamic";
     if (requiresOrgAdmin) {
       assert(accessContext.isOrgAdmin, "You do not have permission to perform this action.", 403);
     } else {
@@ -118,6 +127,14 @@ async function createTeam(authUser, orgId, payload) {
     await assertOrganizationExists(orgId, client);
     assertOrgAccess(orgId, accessContext);
 
+    if (teamType === "dynamic") {
+      assert(
+        teamPayload.dynamicFilter && typeof teamPayload.dynamicFilter === "object" && !Array.isArray(teamPayload.dynamicFilter),
+        "dynamicFilter is required for dynamic teams.",
+        422
+      );
+    }
+
     const teamId = generateId("team");
     await teamModel.createTeam(
       {
@@ -125,7 +142,7 @@ async function createTeam(authUser, orgId, payload) {
         orgId,
         name: teamPayload.name.trim(),
         description: teamPayload.description || null,
-        type: teamPayload.type || "static",
+        type: teamType,
         dynamicFilter: teamPayload.dynamicFilter || null,
         createdBy: authUser.id,
       },
@@ -133,11 +150,11 @@ async function createTeam(authUser, orgId, payload) {
     );
 
     if (Array.isArray(teamPayload.permissionOverrides)) {
-      const overrides = teamPayload.permissionOverrides.map(normalizeOverride);
+      const overrides = dedupeOverrides(teamPayload.permissionOverrides.map(normalizeOverride));
       await teamModel.replaceTeamPermissionOverrides(teamId, overrides, client);
     }
 
-    if ((teamPayload.type || "static") === "static" && Array.isArray(teamPayload.memberIds) && teamPayload.memberIds.length) {
+    if (teamType === "static" && Array.isArray(teamPayload.memberIds) && teamPayload.memberIds.length) {
       for (const userId of teamPayload.memberIds) {
         const user = await assertUserExists(userId, client);
         assert(user.org_id === orgId, "User is not part of this organization.", 422);
@@ -187,7 +204,7 @@ async function updateTeam(authUser, orgId, teamId, payload) {
     );
 
     if (Object.prototype.hasOwnProperty.call(updates, "permissionOverrides")) {
-      const overrides = (updates.permissionOverrides || []).map(normalizeOverride);
+      const overrides = dedupeOverrides((updates.permissionOverrides || []).map(normalizeOverride));
       await teamModel.replaceTeamPermissionOverrides(teamId, overrides, client);
     }
 

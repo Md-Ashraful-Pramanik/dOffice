@@ -600,6 +600,10 @@ function validateCreateTeamPayload(req, res, next) {
     return res.status(422).json({ errors: { type: ["must be static or dynamic"] } });
   }
 
+  if (team.description !== undefined && team.description !== null && typeof team.description !== "string") {
+    return res.status(422).json({ errors: { description: ["must be a string or null"] } });
+  }
+
   if (team.memberIds !== undefined && (!Array.isArray(team.memberIds) || !team.memberIds.every(isNonEmptyString))) {
     return res.status(422).json({ errors: { memberIds: ["must be an array of user IDs"] } });
   }
@@ -613,6 +617,10 @@ function validateCreateTeamPayload(req, res, next) {
 
   if (team.dynamicFilter !== undefined && !isPlainObject(team.dynamicFilter)) {
     return res.status(422).json({ errors: { dynamicFilter: ["must be an object"] } });
+  }
+
+  if (team.type === "dynamic" && !isPlainObject(team.dynamicFilter)) {
+    return res.status(422).json({ errors: { dynamicFilter: ["is required for dynamic teams"] } });
   }
 
   next();
@@ -634,6 +642,10 @@ function validateUpdateTeamPayload(req, res, next) {
 
   if (Object.prototype.hasOwnProperty.call(team, "name") && !isNonEmptyString(team.name)) {
     return res.status(422).json({ errors: { name: ["can't be blank"] } });
+  }
+
+  if (Object.prototype.hasOwnProperty.call(team, "description") && team.description !== null && typeof team.description !== "string") {
+    return res.status(422).json({ errors: { description: ["must be a string or null"] } });
   }
 
   if (

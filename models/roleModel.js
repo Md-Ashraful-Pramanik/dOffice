@@ -164,7 +164,7 @@ async function replaceRolePermissions(roleId, permissions, client = db) {
   const params = [];
 
   permissions.forEach((permission, index) => {
-    const base = index * 4;
+    const base = index * 3;
     values.push(`($1, $${base + 2}, $${base + 3}, $${base + 4})`);
     params.push(permission.module, permission.action, permission.allow);
   });
