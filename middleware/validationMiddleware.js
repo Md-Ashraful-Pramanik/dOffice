@@ -1069,6 +1069,334 @@ function validateReorderCategoriesPayload(req, res, next) {
   next();
 }
 
+function validateListConversationsQuery(req, res, next) {
+  const { type, search, limit, offset } = req.query || {};
+  const validTypes = new Set(["dm", "group"]);
+
+  if (rejectUnknownQueryParams(res, req.query, ["type", "search", "limit", "offset"])) {
+    return;
+  }
+
+  if (type !== undefined && (!isNonEmptyString(type) || !validTypes.has(type))) {
+    return res.status(422).json({ errors: { type: ["must be dm or group"] } });
+  }
+
+  if (search !== undefined && typeof search !== "string") {
+    return res.status(422).json({ errors: { search: ["must be a string"] } });
+  }
+
+  if (limit !== undefined && parseNonNegativeInteger(limit) === null) {
+    return res.status(422).json({ errors: { limit: ["must be a non-negative integer"] } });
+  }
+
+  if (offset !== undefined && parseNonNegativeInteger(offset) === null) {
+    return res.status(422).json({ errors: { offset: ["must be a non-negative integer"] } });
+  }
+
+  next();
+}
+
+function validateCreateConversationPayload(req, res, next) {
+  const conversation = req.body && req.body.conversation;
+
+  if (!isPlainObject(conversation)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  if (rejectUnknownPayloadFields(res, conversation, ["type", "name", "participantIds"])) {
+    return;
+  }
+
+  if (!isNonEmptyString(conversation.type) || !Array.isArray(conversation.participantIds) || !conversation.participantIds.length) {
+    return res.status(422).json({ errors: { body: ["required fields: type, participantIds"] } });
+  }
+
+  if (!["dm", "group"].includes(conversation.type)) {
+    return res.status(422).json({ errors: { type: ["must be dm or group"] } });
+  }
+
+  if (conversation.name !== undefined && !isNullableString(conversation.name)) {
+    return res.status(422).json({ errors: { name: ["must be a string or null"] } });
+  }
+
+  if (!conversation.participantIds.every(isNonEmptyString)) {
+    return res.status(422).json({ errors: { participantIds: ["must be an array of user IDs"] } });
+  }
+
+  next();
+}
+
+function validateConversationParticipantsPayload(req, res, next) {
+  const { userIds } = req.body || {};
+
+  if (rejectUnknownPayloadFields(res, req.body || {}, ["userIds"])) {
+    return;
+  }
+
+  if (!Array.isArray(userIds) || !userIds.length || !userIds.every(isNonEmptyString)) {
+    return res.status(422).json({ errors: { userIds: ["must be a non-empty array of user IDs"] } });
+  }
+
+  next();
+}
+
+function validateListMessagesQuery(req, res, next) {
+  const { before, after, limit } = req.query || {};
+
+  if (rejectUnknownQueryParams(res, req.query, ["before", "after", "limit"])) {
+    return;
+  }
+
+  if (before !== undefined && !isNonEmptyString(before)) {
+    return res.status(422).json({ errors: { before: ["must be a non-empty string"] } });
+  }
+
+  if (after !== undefined && !isNonEmptyString(after)) {
+    return res.status(422).json({ errors: { after: ["must be a non-empty string"] } });
+  }
+
+  if (before !== undefined && after !== undefined) {
+    return res.status(422).json({ errors: { body: ["before and after cannot be used together"] } });
+  }
+
+  if (limit !== undefined && parseNonNegativeInteger(limit) === null) {
+    return res.status(422).json({ errors: { limit: ["must be a non-negative integer"] } });
+  }
+
+  next();
+}
+
+function validateCreateMessagePayload(req, res, next) {
+  const message = req.body && req.body.message;
+
+  if (!isPlainObject(message)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  if (rejectUnknownPayloadFields(res, message, ["body", "format", "attachments", "mentions", "replyTo", "encryption"])) {
+    return;
+  }
+
+  if (!isNonEmptyString(message.body)) {
+    return res.status(422).json({ errors: { body: ["required fields: body"] } });
+  }
+
+  if (message.format !== undefined && !["plaintext", "markdown", "encrypted"].includes(message.format)) {
+    return res.status(422).json({ errors: { format: ["must be plaintext, markdown, or encrypted"] } });
+  }
+
+  if (message.replyTo !== undefined && message.replyTo !== null && !isNonEmptyString(message.replyTo)) {
+    return res.status(422).json({ errors: { replyTo: ["must be a non-empty string or null"] } });
+  }
+
+  if (message.attachments !== undefined) {
+    if (!Array.isArray(message.attachments)) {
+      return res.status(422).json({ errors: { attachments: ["must be an array"] } });
+    }
+
+    const invalidAttachment = message.attachments.some((attachment) => {
+      return !isPlainObject(attachment)
+        || !isNonEmptyString(attachment.fileId)
+        || !isNonEmptyString(attachment.filename)
+        || !isNonEmptyString(attachment.mimeType)
+        || Number.isNaN(Number(attachment.size));
+    });
+
+    if (invalidAttachment) {
+      return res.status(422).json({ errors: { attachments: ["contains an invalid attachment"] } });
+    }
+  }
+
+  if (message.mentions !== undefined && (!Array.isArray(message.mentions) || !message.mentions.every(isNonEmptyString))) {
+    return res.status(422).json({ errors: { mentions: ["must be an array of user IDs"] } });
+  }
+
+  if (message.encryption !== undefined && !isPlainObject(message.encryption)) {
+    return res.status(422).json({ errors: { encryption: ["must be an object"] } });
+  }
+
+  next();
+}
+
+function validateUpdateMessagePayload(req, res, next) {
+  const message = req.body && req.body.message;
+
+  if (!isPlainObject(message)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  if (rejectUnknownPayloadFields(res, message, ["body"])) {
+    return;
+  }
+
+  if (!isNonEmptyString(message.body)) {
+    return res.status(422).json({ errors: { body: ["required fields: body"] } });
+  }
+
+  next();
+}
+
+function validateThreadListQuery(req, res, next) {
+  const { limit, offset } = req.query || {};
+
+  if (rejectUnknownQueryParams(res, req.query, ["limit", "offset"])) {
+    return;
+  }
+
+  if (limit !== undefined && parseNonNegativeInteger(limit) === null) {
+    return res.status(422).json({ errors: { limit: ["must be a non-negative integer"] } });
+  }
+
+  if (offset !== undefined && parseNonNegativeInteger(offset) === null) {
+    return res.status(422).json({ errors: { offset: ["must be a non-negative integer"] } });
+  }
+
+  next();
+}
+
+function validateReactionPayload(req, res, next) {
+  const { emoji } = req.body || {};
+
+  if (rejectUnknownPayloadFields(res, req.body || {}, ["emoji"])) {
+    return;
+  }
+
+  if (!isNonEmptyString(emoji)) {
+    return res.status(422).json({ errors: { emoji: ["can't be blank"] } });
+  }
+
+  next();
+}
+
+function validateBookmarksQuery(req, res, next) {
+  const { limit, offset } = req.query || {};
+
+  if (rejectUnknownQueryParams(res, req.query, ["limit", "offset"])) {
+    return;
+  }
+
+  if (limit !== undefined && parseNonNegativeInteger(limit) === null) {
+    return res.status(422).json({ errors: { limit: ["must be a non-negative integer"] } });
+  }
+
+  if (offset !== undefined && parseNonNegativeInteger(offset) === null) {
+    return res.status(422).json({ errors: { offset: ["must be a non-negative integer"] } });
+  }
+
+  next();
+}
+
+function validateBookmarkPayload(req, res, next) {
+  const { messageId } = req.body || {};
+
+  if (rejectUnknownPayloadFields(res, req.body || {}, ["messageId"])) {
+    return;
+  }
+
+  if (!isNonEmptyString(messageId)) {
+    return res.status(422).json({ errors: { messageId: ["can't be blank"] } });
+  }
+
+  next();
+}
+
+function validateCreatePollPayload(req, res, next) {
+  const poll = req.body && req.body.poll;
+
+  if (!isPlainObject(poll)) {
+    return res.status(422).json({ errors: { body: ["can't be blank"] } });
+  }
+
+  if (rejectUnknownPayloadFields(res, poll, ["question", "options", "multipleChoice", "anonymous", "expiresAt"])) {
+    return;
+  }
+
+  if (!isNonEmptyString(poll.question) || !Array.isArray(poll.options) || !poll.options.length) {
+    return res.status(422).json({ errors: { body: ["required fields: question, options"] } });
+  }
+
+  if (!poll.options.every(isNonEmptyString)) {
+    return res.status(422).json({ errors: { options: ["must be an array of non-empty strings"] } });
+  }
+
+  if (poll.multipleChoice !== undefined && typeof poll.multipleChoice !== "boolean") {
+    return res.status(422).json({ errors: { multipleChoice: ["must be a boolean"] } });
+  }
+
+  if (poll.anonymous !== undefined && typeof poll.anonymous !== "boolean") {
+    return res.status(422).json({ errors: { anonymous: ["must be a boolean"] } });
+  }
+
+  if (poll.expiresAt !== undefined && poll.expiresAt !== null && !isNonEmptyString(poll.expiresAt)) {
+    return res.status(422).json({ errors: { expiresAt: ["must be a valid ISO date string or null"] } });
+  }
+
+  next();
+}
+
+function validateVotePollPayload(req, res, next) {
+  const { optionIndex } = req.body || {};
+
+  if (rejectUnknownPayloadFields(res, req.body || {}, ["optionIndex"])) {
+    return;
+  }
+
+  if (parseNonNegativeInteger(optionIndex) === null) {
+    return res.status(422).json({ errors: { optionIndex: ["must be a non-negative integer"] } });
+  }
+
+  next();
+}
+
+function validateSearchMessagesQuery(req, res, next) {
+  const { q, channelId, conversationId, senderId, from, to, hasAttachment, hasLink, isPinned, limit, offset } = req.query || {};
+
+  if (rejectUnknownQueryParams(res, req.query, ["q", "channelId", "conversationId", "senderId", "from", "to", "hasAttachment", "hasLink", "isPinned", "limit", "offset"])) {
+    return;
+  }
+
+  if (!isNonEmptyString(q)) {
+    return res.status(422).json({ errors: { q: ["can't be blank"] } });
+  }
+
+  if (channelId !== undefined && !isNonEmptyString(channelId)) {
+    return res.status(422).json({ errors: { channelId: ["must be a non-empty string"] } });
+  }
+
+  if (conversationId !== undefined && !isNonEmptyString(conversationId)) {
+    return res.status(422).json({ errors: { conversationId: ["must be a non-empty string"] } });
+  }
+
+  if (senderId !== undefined && !isNonEmptyString(senderId)) {
+    return res.status(422).json({ errors: { senderId: ["must be a non-empty string"] } });
+  }
+
+  const booleanFields = { hasAttachment, hasLink, isPinned };
+  for (const [field, value] of Object.entries(booleanFields)) {
+    if (value !== undefined && value !== "true" && value !== "false") {
+      return res.status(422).json({ errors: { [field]: ["must be true or false"] } });
+    }
+  }
+
+  if (limit !== undefined && parseNonNegativeInteger(limit) === null) {
+    return res.status(422).json({ errors: { limit: ["must be a non-negative integer"] } });
+  }
+
+  if (offset !== undefined && parseNonNegativeInteger(offset) === null) {
+    return res.status(422).json({ errors: { offset: ["must be a non-negative integer"] } });
+  }
+
+  if (from !== undefined && !isNonEmptyString(from)) {
+    return res.status(422).json({ errors: { from: ["must be a valid ISO date string"] } });
+  }
+
+  if (to !== undefined && !isNonEmptyString(to)) {
+    return res.status(422).json({ errors: { to: ["must be a valid ISO date string"] } });
+  }
+
+  next();
+}
+
 module.exports = {
   validateRegisterPayload,
   validateLoginPayload,
@@ -1106,4 +1434,17 @@ module.exports = {
   validateCreateCategoryPayload,
   validateUpdateCategoryPayload,
   validateReorderCategoriesPayload,
+  validateListConversationsQuery,
+  validateCreateConversationPayload,
+  validateConversationParticipantsPayload,
+  validateListMessagesQuery,
+  validateCreateMessagePayload,
+  validateUpdateMessagePayload,
+  validateThreadListQuery,
+  validateReactionPayload,
+  validateBookmarksQuery,
+  validateBookmarkPayload,
+  validateCreatePollPayload,
+  validateVotePollPayload,
+  validateSearchMessagesQuery,
 };

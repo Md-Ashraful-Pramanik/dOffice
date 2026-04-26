@@ -906,6 +906,459 @@ async function runMigrations() {
       WHERE deleted_at IS NULL;
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_conversations (
+        id VARCHAR(64) PRIMARY KEY,
+        type VARCHAR(16) NOT NULL,
+        name VARCHAR(255),
+        created_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        e2ee BOOLEAN NOT NULL DEFAULT FALSE,
+        disappearing_timer INTEGER NOT NULL DEFAULT 0,
+        dm_key TEXT,
+        deleted_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_conversations
+      ADD COLUMN IF NOT EXISTS created_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_conversations
+      ADD COLUMN IF NOT EXISTS e2ee BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_conversations
+      ADD COLUMN IF NOT EXISTS disappearing_timer INTEGER NOT NULL DEFAULT 0;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_conversations
+      ADD COLUMN IF NOT EXISTS dm_key TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_conversations
+      ADD COLUMN IF NOT EXISTS deleted_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_conversations
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_conversations_type_check'
+        ) THEN
+          ALTER TABLE doffice_conversations
+          ADD CONSTRAINT doffice_conversations_type_check
+          CHECK (type IN ('dm', 'group'));
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_doffice_conversations_active_dm_key
+      ON doffice_conversations(dm_key)
+      WHERE type = 'dm' AND deleted_at IS NULL AND dm_key IS NOT NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_conversations_created_by
+      ON doffice_conversations(created_by)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_conversation_participants (
+        conversation_id VARCHAR(64) NOT NULL REFERENCES doffice_conversations(id) ON DELETE CASCADE,
+        user_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        role VARCHAR(16) NOT NULL DEFAULT 'member',
+        added_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (conversation_id, user_id)
+      );
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_conversation_participants
+      ADD COLUMN IF NOT EXISTS added_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_conversation_participants
+      ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_conversation_participants
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_conversation_participants
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_conversation_participants_role_check'
+        ) THEN
+          ALTER TABLE doffice_conversation_participants
+          ADD CONSTRAINT doffice_conversation_participants_role_check
+          CHECK (role IN ('admin', 'member'));
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_conversation_participants_user_id
+      ON doffice_conversation_participants(user_id)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_conversation_participants_conversation_role
+      ON doffice_conversation_participants(conversation_id, role)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_messages (
+        id VARCHAR(64) PRIMARY KEY,
+        body TEXT NOT NULL,
+        format VARCHAR(24) NOT NULL DEFAULT 'plaintext',
+        message_type VARCHAR(24) NOT NULL DEFAULT 'regular',
+        sender_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE RESTRICT,
+        target_type VARCHAR(24) NOT NULL,
+        channel_id VARCHAR(64) REFERENCES doffice_channels(id) ON DELETE CASCADE,
+        conversation_id VARCHAR(64) REFERENCES doffice_conversations(id) ON DELETE CASCADE,
+        thread_parent_id VARCHAR(64) REFERENCES doffice_messages(id) ON DELETE SET NULL,
+        reply_to_message_id VARCHAR(64) REFERENCES doffice_messages(id) ON DELETE SET NULL,
+        attachments JSONB NOT NULL DEFAULT '[]'::jsonb,
+        mentions TEXT[] NOT NULL DEFAULT ARRAY[]::text[],
+        encryption JSONB,
+        poll_id VARCHAR(64),
+        is_pinned BOOLEAN NOT NULL DEFAULT FALSE,
+        pinned_at TIMESTAMPTZ,
+        pinned_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        edited BOOLEAN NOT NULL DEFAULT FALSE,
+        edited_at TIMESTAMPTZ,
+        deleted_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS format VARCHAR(24) NOT NULL DEFAULT 'plaintext';
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS message_type VARCHAR(24) NOT NULL DEFAULT 'regular';
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS channel_id VARCHAR(64) REFERENCES doffice_channels(id) ON DELETE CASCADE;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS conversation_id VARCHAR(64) REFERENCES doffice_conversations(id) ON DELETE CASCADE;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS thread_parent_id VARCHAR(64) REFERENCES doffice_messages(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS reply_to_message_id VARCHAR(64) REFERENCES doffice_messages(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS attachments JSONB NOT NULL DEFAULT '[]'::jsonb;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS mentions TEXT[] NOT NULL DEFAULT ARRAY[]::text[];
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS encryption JSONB;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS poll_id VARCHAR(64);
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS pinned_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS edited BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS deleted_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_messages_target_type_check'
+        ) THEN
+          ALTER TABLE doffice_messages
+          ADD CONSTRAINT doffice_messages_target_type_check
+          CHECK (target_type IN ('channel', 'conversation'));
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_messages_format_check'
+        ) THEN
+          ALTER TABLE doffice_messages
+          ADD CONSTRAINT doffice_messages_format_check
+          CHECK (format IN ('plaintext', 'markdown', 'encrypted'));
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_messages_message_type_check'
+        ) THEN
+          ALTER TABLE doffice_messages
+          ADD CONSTRAINT doffice_messages_message_type_check
+          CHECK (message_type IN ('regular', 'poll'));
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_messages_single_target_check'
+        ) THEN
+          ALTER TABLE doffice_messages
+          ADD CONSTRAINT doffice_messages_single_target_check
+          CHECK (
+            (target_type = 'channel' AND channel_id IS NOT NULL AND conversation_id IS NULL)
+            OR (target_type = 'conversation' AND conversation_id IS NOT NULL AND channel_id IS NULL)
+          );
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_messages_channel_created_at
+      ON doffice_messages(channel_id, created_at DESC, id DESC)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_messages_conversation_created_at
+      ON doffice_messages(conversation_id, created_at DESC, id DESC)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_messages_thread_parent_id
+      ON doffice_messages(thread_parent_id)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_messages_sender_id
+      ON doffice_messages(sender_id)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_messages_pinned
+      ON doffice_messages(channel_id, is_pinned, pinned_at DESC)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_message_edits (
+        id BIGSERIAL PRIMARY KEY,
+        message_id VARCHAR(64) NOT NULL REFERENCES doffice_messages(id) ON DELETE CASCADE,
+        body TEXT NOT NULL,
+        edited_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_message_edits_message_id
+      ON doffice_message_edits(message_id, edited_at ASC);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_message_reactions (
+        message_id VARCHAR(64) NOT NULL REFERENCES doffice_messages(id) ON DELETE CASCADE,
+        user_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        emoji VARCHAR(64) NOT NULL,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (message_id, user_id, emoji)
+      );
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_message_reactions
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_message_reactions_message_id
+      ON doffice_message_reactions(message_id)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_user_bookmarks (
+        user_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        message_id VARCHAR(64) NOT NULL REFERENCES doffice_messages(id) ON DELETE CASCADE,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, message_id)
+      );
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_user_bookmarks
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_user_bookmarks_user_id
+      ON doffice_user_bookmarks(user_id, created_at DESC)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_polls (
+        id VARCHAR(64) PRIMARY KEY,
+        channel_id VARCHAR(64) NOT NULL REFERENCES doffice_channels(id) ON DELETE CASCADE,
+        message_id VARCHAR(64) NOT NULL REFERENCES doffice_messages(id) ON DELETE CASCADE,
+        question TEXT NOT NULL,
+        options JSONB NOT NULL,
+        multiple_choice BOOLEAN NOT NULL DEFAULT FALSE,
+        anonymous BOOLEAN NOT NULL DEFAULT FALSE,
+        expires_at TIMESTAMPTZ,
+        created_by VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE RESTRICT,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_polls
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_doffice_polls_message_id
+      ON doffice_polls(message_id)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_polls_channel_id
+      ON doffice_polls(channel_id)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_poll_votes (
+        poll_id VARCHAR(64) NOT NULL REFERENCES doffice_polls(id) ON DELETE CASCADE,
+        user_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        option_index INTEGER NOT NULL,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (poll_id, user_id, option_index)
+      );
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_poll_votes
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_poll_votes_poll_id
+      ON doffice_poll_votes(poll_id)
+      WHERE deleted_at IS NULL;
+    `);
+
     await client.query(
       `INSERT INTO doffice_roles (id, name, description, type, is_system)
        VALUES ($1, $2, $3, 'system', TRUE)
