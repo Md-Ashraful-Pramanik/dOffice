@@ -860,8 +860,8 @@ async function searchMessages(filters = {}, client = db) {
   }
 
   if (q) {
-    params.push(`%${q}%`);
-    where.push(`m.body ILIKE $${params.length}`);
+    params.push(q);
+    where.push(`to_tsvector('simple', COALESCE(m.body, '')) @@ websearch_to_tsquery('simple', $${params.length}::text)`);
   }
 
   if (channelId) {
@@ -891,14 +891,20 @@ async function searchMessages(filters = {}, client = db) {
 
   if (hasAttachment === true) {
     where.push("jsonb_array_length(COALESCE(m.attachments, '[]'::jsonb)) > 0");
+  } else if (hasAttachment === false) {
+    where.push("jsonb_array_length(COALESCE(m.attachments, '[]'::jsonb)) = 0");
   }
 
   if (hasLink === true) {
     where.push(`m.body ~* '(https?://|www\\.)'`);
+  } else if (hasLink === false) {
+    where.push(`m.body !~* '(https?://|www\\.)'`);
   }
 
   if (isPinned === true) {
     where.push("m.is_pinned = TRUE");
+  } else if (isPinned === false) {
+    where.push("m.is_pinned = FALSE");
   }
 
   const queryParams = [...params, limit + 1, offset];

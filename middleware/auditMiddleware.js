@@ -12,15 +12,19 @@ function attachAuditLogger(req, res, next) {
     }
 
     try {
+      const auditMetadata = {
+        ip: req.ip,
+        userAgent: req.get("user-agent") || null,
+        ...(res.locals.auditMetadata || {}),
+      };
+
       await auditService.recordAudit({
         userId,
         method: req.method,
         endpoint: req.originalUrl,
         statusCode: res.statusCode,
-        metadata: {
-          ip: req.ip,
-          userAgent: req.get("user-agent") || null,
-        },
+        action: res.locals.auditAction,
+        metadata: auditMetadata,
       });
     } catch (error) {
       console.error("Failed to write audit log", error.message);

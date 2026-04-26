@@ -1241,6 +1241,13 @@ async function runMigrations() {
     `);
 
     await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_messages_body_fts
+      ON doffice_messages
+      USING GIN (to_tsvector('simple', COALESCE(body, '')))
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_doffice_messages_pinned
       ON doffice_messages(channel_id, is_pinned, pinned_at DESC)
       WHERE deleted_at IS NULL;

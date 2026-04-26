@@ -1367,6 +1367,10 @@ function validateSearchMessagesQuery(req, res, next) {
     return res.status(422).json({ errors: { conversationId: ["must be a non-empty string"] } });
   }
 
+  if (channelId !== undefined && conversationId !== undefined) {
+    return res.status(422).json({ errors: { body: ["channelId and conversationId cannot be used together"] } });
+  }
+
   if (senderId !== undefined && !isNonEmptyString(senderId)) {
     return res.status(422).json({ errors: { senderId: ["must be a non-empty string"] } });
   }

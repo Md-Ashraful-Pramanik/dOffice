@@ -305,8 +305,11 @@ async function getConversationContext(authUser, conversationId, client = db) {
   };
 }
 
-function canManageConversationParticipant(conversation, participant) {
-  return conversation.type === "group" && participant?.role === "admin";
+function canManageConversationParticipant(conversation, participant, authUserId) {
+  return Boolean(
+    conversation.type === "group"
+      && (participant?.role === "admin" || conversation.created_by === authUserId)
+  );
 }
 
 function canModerateChannel(accessContext, membership) {
@@ -565,7 +568,7 @@ async function addConversationParticipants(authUser, conversationId, payload) {
 
     const { conversation, participant } = await getConversationContext(authUser, conversationId, client);
     assert(conversation.type === "group", "You do not have permission to perform this action.", 403);
-    assert(canManageConversationParticipant(conversation, participant), "You do not have permission to perform this action.", 403);
+    assert(canManageConversationParticipant(conversation, participant, authUser.id), "You do not have permission to perform this action.", 403);
 
     const userIds = normalizeDistinctIds(payload?.userIds || [], "userIds").filter((userId) => userId !== authUser.id);
     assert(userIds.length > 0, "userIds must be a non-empty array of user IDs.", 422);
@@ -607,15 +610,16 @@ async function addConversationParticipants(authUser, conversationId, payload) {
 
 async function removeConversationParticipant(authUser, conversationId, userId) {
   const client = await db.pool.connect();
+  const normalizedUserId = normalizeRequiredString(userId, "userId");
 
   try {
     await client.query("BEGIN");
 
     const { conversation, participant } = await getConversationContext(authUser, conversationId, client);
     assert(conversation.type === "group", "You do not have permission to perform this action.", 403);
-    assert(canManageConversationParticipant(conversation, participant), "You do not have permission to perform this action.", 403);
+    assert(canManageConversationParticipant(conversation, participant, authUser.id), "You do not have permission to perform this action.", 403);
 
-    const targetParticipant = await messagingModel.findConversationParticipant(conversationId, userId, client);
+    const targetParticipant = await messagingModel.findConversationParticipant(conversationId, normalizedUserId, client);
     assert(targetParticipant, "Resource not found.", 404);
 
     if (targetParticipant.role === "admin") {
@@ -623,14 +627,14 @@ async function removeConversationParticipant(authUser, conversationId, userId) {
       assert(adminCount > 1, "Conversation must have at least one admin.", 422);
     }
 
-    await messagingModel.softRemoveConversationParticipant(conversationId, userId, client);
+    await messagingModel.softRemoveConversationParticipant(conversationId, normalizedUserId, client);
     await messagingModel.touchConversation(conversationId, client);
     const audience = await resolveTargetAudience("conversation", conversationId, client);
     await client.query("COMMIT");
 
-    broadcastToUsers([...audience, userId], "conversation:participant_removed", {
+    broadcastToUsers([...audience, normalizedUserId], "conversation:participant_removed", {
       conversationId,
-      userId,
+      userId: normalizedUserId,
     });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -644,6 +648,8 @@ async function getMessageCursor(messageId, client = db) {
   const message = await messagingModel.findMessageById(messageId, client);
   assert(message, "Resource not found.", 404);
   return {
+    targetType: message.target_type,
+    targetId: message.target_type === "channel" ? message.channel_id : message.conversation_id,
     id: message.id,
     created_at: message.created_at,
   };
@@ -674,6 +680,12 @@ async function listChannelMessages(authUser, channelId, query) {
   const beforeCursor = query.before ? await getMessageCursor(query.before) : null;
   const afterCursor = query.after ? await getMessageCursor(query.after) : null;
   assert(!(beforeCursor && afterCursor), "before and after cannot be used together.", 422);
+  if (beforeCursor) {
+    assert(beforeCursor.targetType === "channel" && beforeCursor.targetId === channelId, "before must belong to the same target.", 422);
+  }
+  if (afterCursor) {
+    assert(afterCursor.targetType === "channel" && afterCursor.targetId === channelId, "after must belong to the same target.", 422);
+  }
 
   const rows = await messagingModel.listMessages({
     targetType: "channel",
@@ -696,6 +708,12 @@ async function listConversationMessages(authUser, conversationId, query) {
   const beforeCursor = query.before ? await getMessageCursor(query.before) : null;
   const afterCursor = query.after ? await getMessageCursor(query.after) : null;
   assert(!(beforeCursor && afterCursor), "before and after cannot be used together.", 422);
+  if (beforeCursor) {
+    assert(beforeCursor.targetType === "conversation" && beforeCursor.targetId === conversationId, "before must belong to the same target.", 422);
+  }
+  if (afterCursor) {
+    assert(afterCursor.targetType === "conversation" && afterCursor.targetId === conversationId, "after must belong to the same target.", 422);
+  }
 
   const rows = await messagingModel.listMessages({
     targetType: "conversation",
@@ -943,7 +961,7 @@ async function listThreadMessages(authUser, messageId, query) {
     targetType: message.target_type,
     targetId: message.target_type === "channel" ? message.channel_id : message.conversation_id,
     threadParentId: message.id,
-    limit: limit + offset,
+    limit: limit + offset + 1,
   });
 
   const ordered = rows.reverse().slice(offset);
@@ -1163,7 +1181,8 @@ async function addBookmark(authUser, payload) {
 }
 
 async function removeBookmark(authUser, messageId) {
-  await messagingModel.removeBookmark(authUser.id, messageId);
+  const normalizedMessageId = normalizeRequiredString(messageId, "messageId");
+  await messagingModel.removeBookmark(authUser.id, normalizedMessageId);
 }
 
 function toPollResponse(poll, voteRows) {
@@ -1334,6 +1353,7 @@ async function searchMessages(authUser, query) {
   const limit = parseLimit(query.limit, 20, 100);
   const offset = parseNonNegativeInt(query.offset, 0, "offset");
   const q = normalizeRequiredString(query.q, "q");
+  assert(!(query.channelId && query.conversationId), "channelId and conversationId cannot be used together.", 422);
 
   if (query.channelId) {
     await getChannelAccessContext(authUser, query.channelId);
