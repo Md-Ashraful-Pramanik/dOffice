@@ -361,6 +361,7 @@ async function buildConversationResponse(authUser, conversation, client = db, op
       targetType: "conversation",
       targetId: conversation.id,
       limit: 1,
+      includeThreadReplies: true,
     },
     client
   );
@@ -649,14 +650,50 @@ async function removeConversationParticipant(authUser, conversationId, userId) {
     const targetParticipant = await messagingModel.findConversationParticipant(conversationId, normalizedUserId, client);
     assert(targetParticipant, "Resource not found.", 404);
 
+    const existingParticipants = await messagingModel.listConversationParticipants([conversationId], client);
+    const remainingParticipants = existingParticipants.filter((row) => row.user_id !== normalizedUserId);
+
+    let fallbackAdmin = remainingParticipants.find((participant) => participant.role === "admin") || null;
+
     if (targetParticipant.role === "admin") {
       const adminCount = await messagingModel.countConversationAdmins(conversationId, client);
-      assert(adminCount > 1, "Conversation must have at least one admin.", 422);
+      if (adminCount <= 1 && remainingParticipants.length) {
+        fallbackAdmin = remainingParticipants[0];
+      }
     }
 
     const removedParticipant = await messagingModel.softRemoveConversationParticipant(conversationId, normalizedUserId, client);
     assert(removedParticipant, "Resource not found.", 404);
-    await messagingModel.touchConversation(conversationId, client);
+
+    if (targetParticipant.role === "admin" && fallbackAdmin && fallbackAdmin.role !== "admin") {
+      await messagingModel.updateConversationParticipantRole(conversationId, fallbackAdmin.user_id, "admin", client);
+    }
+
+    if (remainingParticipants.length) {
+      if (conversation.created_by === normalizedUserId) {
+        const nextCreatorId = (fallbackAdmin && fallbackAdmin.user_id) || remainingParticipants[0].user_id;
+        await messagingModel.updateConversation(
+          conversationId,
+          {
+            createdBy: nextCreatorId,
+          },
+          client
+        );
+      } else {
+        await messagingModel.touchConversation(conversationId, client);
+      }
+    } else {
+      await messagingModel.updateConversation(
+        conversationId,
+        {
+          deletedAt: new Date().toISOString(),
+          deletedBy: authUser.id,
+          ...(conversation.created_by === normalizedUserId ? { createdBy: null } : {}),
+        },
+        client
+      );
+    }
+
     const audience = await resolveTargetAudience("conversation", conversationId, client);
     await client.query("COMMIT");
 
@@ -1111,6 +1148,7 @@ async function listPinnedMessages(authUser, channelId) {
     targetId: channelId,
     pinnedOnly: true,
     limit: 100,
+    includeThreadReplies: true,
   });
 
   return buildMessagesResponse(rows, null, {

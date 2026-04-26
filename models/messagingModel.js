@@ -89,6 +89,45 @@ async function touchConversation(conversationId, client = db) {
   );
 }
 
+async function updateConversation(conversationId, updates = {}, client = db) {
+  const fields = [];
+  const params = [];
+
+  const setField = (column, value, cast = "") => {
+    params.push(value);
+    fields.push(`${column} = $${params.length}${cast}`);
+  };
+
+  if (Object.prototype.hasOwnProperty.call(updates, "createdBy")) {
+    setField("created_by", updates.createdBy);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "deletedBy")) {
+    setField("deleted_by", updates.deletedBy);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, "deletedAt")) {
+    setField("deleted_at", updates.deletedAt, "::timestamptz");
+  }
+
+  if (!fields.length) {
+    return null;
+  }
+
+  fields.push("updated_at = NOW()");
+  params.push(conversationId);
+
+  const result = await client.query(
+    `UPDATE doffice_conversations
+     SET ${fields.join(", ")}
+     WHERE id = $${params.length}::varchar(64)
+     RETURNING id, type, name, created_by, e2ee, disappearing_timer, dm_key, deleted_at, created_at, updated_at`,
+    params
+  );
+
+  return result.rows[0] || null;
+}
+
 async function findConversationById(conversationId, client = db) {
   const result = await client.query(
     `SELECT id, type, name, created_by, e2ee, disappearing_timer, dm_key, deleted_at, created_at, updated_at
@@ -201,6 +240,21 @@ async function softRemoveConversationParticipant(conversationId, userId, client 
        AND deleted_at IS NULL
      RETURNING conversation_id, user_id`,
     [conversationId, userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function updateConversationParticipantRole(conversationId, userId, role, client = db) {
+  const result = await client.query(
+    `UPDATE doffice_conversation_participants
+     SET role = $3::varchar(16),
+         updated_at = NOW()
+     WHERE conversation_id = $1::varchar(64)
+       AND user_id = $2::varchar(64)
+       AND deleted_at IS NULL
+     RETURNING conversation_id, user_id, role, added_by, joined_at, created_at, updated_at`,
+    [conversationId, userId, role]
   );
 
   return result.rows[0] || null;
@@ -419,6 +473,7 @@ async function listMessages(filters = {}, client = db) {
     afterCursor = null,
     threadParentId = null,
     pinnedOnly = false,
+    includeThreadReplies = false,
   } = filters;
 
   const params = [];
@@ -435,7 +490,7 @@ async function listMessages(filters = {}, client = db) {
   if (threadParentId) {
     params.push(threadParentId);
     where.push(`m.thread_parent_id = $${params.length}::varchar(64)`);
-  } else {
+  } else if (!includeThreadReplies) {
     where.push("m.thread_parent_id IS NULL");
   }
 
@@ -924,12 +979,14 @@ module.exports = {
   findUsersByIds,
   createConversation,
   touchConversation,
+  updateConversation,
   findConversationById,
   findConversationByDmKey,
   upsertConversationParticipant,
   findConversationParticipant,
   listConversationParticipants,
   softRemoveConversationParticipant,
+  updateConversationParticipantRole,
   countConversationAdmins,
   listConversations,
   listChannelMemberUserIds,
