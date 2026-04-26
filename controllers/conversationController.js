@@ -28,13 +28,13 @@ async function getConversation(req, res, next) {
 
 async function createConversation(req, res, next) {
   try {
-    const response = await messagingService.createConversation(req.auth.user, req.body);
+    const { response, created } = await messagingService.createConversation(req.auth.user, req.body);
     setAudit(res, "conversation.create", {
       conversationId: response.conversation.id,
       type: response.conversation.type,
       participantCount: Array.isArray(response.conversation.participants) ? response.conversation.participants.length : 0,
     });
-    res.status(201).json(response);
+    res.status(created ? 201 : 200).json(response);
   } catch (error) {
     next(error);
   }

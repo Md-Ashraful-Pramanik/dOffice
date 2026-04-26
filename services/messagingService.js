@@ -13,7 +13,7 @@ const { broadcastToUsers } = require("../realtime/websocketServer");
 const CONVERSATION_TYPES = new Set(["dm", "group"]);
 const MESSAGE_FORMATS = new Set(["plaintext", "markdown", "encrypted"]);
 const MESSAGE_TYPES = new Set(["regular", "poll"]);
-const EMOJI_PATTERN = /^[A-Za-z0-9_+-]{1,64}$/;
+const EMOJI_PATTERN = /^[^\s]{1,64}$/u;
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -312,6 +312,25 @@ function canManageConversationParticipant(conversation, participant, authUserId)
   );
 }
 
+async function getConversationParticipantManagementContext(authUser, conversationId, client = db) {
+  const conversation = await messagingModel.findConversationById(conversationId, client);
+  assert(conversation, "Resource not found.", 404);
+
+  const participant = await messagingModel.findConversationParticipant(conversationId, authUser.id, client);
+  const accessContext = await getAccessContext(authUser, client);
+  const canManage = canManageConversationParticipant(conversation, participant, authUser.id)
+    || accessContext.isSuperAdmin
+    || accessContext.isOrgAdmin;
+
+  assert(canManage, "You do not have permission to perform this action.", 403);
+
+  return {
+    conversation,
+    participant,
+    accessContext,
+  };
+}
+
 function canModerateChannel(accessContext, membership) {
   return Boolean(
     accessContext.isSuperAdmin
@@ -481,18 +500,15 @@ async function createConversation(authUser, payload) {
       assert(userMap.has(userId), "Resource not found.", 404);
     });
 
-    if (authUser.org_id) {
-      participantIds.forEach((userId) => {
-        assert(userMap.get(userId).org_id === authUser.org_id, "Users must belong to the same organization.", 422);
-      });
-    }
-
     if (type === "dm") {
       const dmKey = createDmKey(authUser.id, participantIds[0]);
       const existing = await messagingModel.findConversationByDmKey(dmKey, client);
       if (existing) {
         await client.query("COMMIT");
-        return buildConversationResponse(authUser, existing, client, { includeSelf: true });
+        return {
+          response: await buildConversationResponse(authUser, existing, client, { includeSelf: true }),
+          created: false,
+        };
       }
 
       const conversationId = generateId("conv");
@@ -520,7 +536,10 @@ async function createConversation(authUser, payload) {
 
       const created = await messagingModel.findConversationById(conversationId, client);
       await client.query("COMMIT");
-      return buildConversationResponse(authUser, created, db, { includeSelf: true });
+      return {
+        response: await buildConversationResponse(authUser, created, db, { includeSelf: true }),
+        created: true,
+      };
     }
 
     const conversationId = generateId("conv");
@@ -551,7 +570,10 @@ async function createConversation(authUser, payload) {
 
     const created = await messagingModel.findConversationById(conversationId, client);
     await client.query("COMMIT");
-    return buildConversationResponse(authUser, created, db, { includeSelf: true });
+    return {
+      response: await buildConversationResponse(authUser, created, db, { includeSelf: true }),
+      created: true,
+    };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -566,9 +588,8 @@ async function addConversationParticipants(authUser, conversationId, payload) {
   try {
     await client.query("BEGIN");
 
-    const { conversation, participant } = await getConversationContext(authUser, conversationId, client);
+    const { conversation } = await getConversationParticipantManagementContext(authUser, conversationId, client);
     assert(conversation.type === "group", "You do not have permission to perform this action.", 403);
-    assert(canManageConversationParticipant(conversation, participant, authUser.id), "You do not have permission to perform this action.", 403);
 
     const userIds = normalizeDistinctIds(payload?.userIds || [], "userIds").filter((userId) => userId !== authUser.id);
     assert(userIds.length > 0, "userIds must be a non-empty array of user IDs.", 422);
@@ -577,9 +598,6 @@ async function addConversationParticipants(authUser, conversationId, payload) {
     const userMap = new Map(users.map((user) => [user.id, user]));
     userIds.forEach((userId) => {
       assert(userMap.has(userId), "Resource not found.", 404);
-      if (authUser.org_id) {
-        assert(userMap.get(userId).org_id === authUser.org_id, "Users must belong to the same organization.", 422);
-      }
     });
 
     for (const userId of userIds) {
@@ -615,9 +633,8 @@ async function removeConversationParticipant(authUser, conversationId, userId) {
   try {
     await client.query("BEGIN");
 
-    const { conversation, participant } = await getConversationContext(authUser, conversationId, client);
+    const { conversation } = await getConversationParticipantManagementContext(authUser, conversationId, client);
     assert(conversation.type === "group", "You do not have permission to perform this action.", 403);
-    assert(canManageConversationParticipant(conversation, participant, authUser.id), "You do not have permission to perform this action.", 403);
 
     const targetParticipant = await messagingModel.findConversationParticipant(conversationId, normalizedUserId, client);
     assert(targetParticipant, "Resource not found.", 404);
@@ -627,7 +644,8 @@ async function removeConversationParticipant(authUser, conversationId, userId) {
       assert(adminCount > 1, "Conversation must have at least one admin.", 422);
     }
 
-    await messagingModel.softRemoveConversationParticipant(conversationId, normalizedUserId, client);
+    const removedParticipant = await messagingModel.softRemoveConversationParticipant(conversationId, normalizedUserId, client);
+    assert(removedParticipant, "Resource not found.", 404);
     await messagingModel.touchConversation(conversationId, client);
     const audience = await resolveTargetAudience("conversation", conversationId, client);
     await client.query("COMMIT");
@@ -739,13 +757,22 @@ async function createMessageForTarget(authUser, target, payload, extra = {}) {
   const mentions = normalizeMentions(messagePayload.mentions);
   const encryption = normalizeEncryption(messagePayload.encryption, format);
   const replyToMessageId = normalizeOptionalString(messagePayload.replyTo);
+  let threadParentId = extra.threadParentId || null;
+
+  if (target.kind === "channel") {
+    assert(format !== "encrypted", "format is invalid.", 422);
+  }
 
   if (target.kind === "conversation" && target.context.conversation.e2ee) {
     assert(format === "encrypted", "Encrypted conversations require format to be encrypted.", 422);
     assert(encryption, "encryption metadata is required for encrypted conversations.", 422);
   }
 
-  if (target.kind === "channel" && target.context.channel.type === "announcement") {
+  if (
+    target.kind === "channel"
+    && target.context.channel.type === "announcement"
+    && !extra.allowThreadReplyInAnnouncement
+  ) {
     assert(canSendToAnnouncement(target.context.accessContext, target.context.membership), "You do not have permission to perform this action.", 403);
   }
 
@@ -757,6 +784,13 @@ async function createMessageForTarget(authUser, target, payload, extra = {}) {
       assert(replyTarget.channel_id === target.targetId, "replyTo must belong to the same target.", 422);
     } else {
       assert(replyTarget.conversation_id === target.targetId, "replyTo must belong to the same target.", 422);
+    }
+
+    const resolvedThreadParentId = replyTarget.thread_parent_id || replyTarget.id;
+    if (threadParentId) {
+      assert(resolvedThreadParentId === threadParentId, "replyTo must belong to the same thread.", 422);
+    } else {
+      threadParentId = resolvedThreadParentId;
     }
   }
 
@@ -777,7 +811,7 @@ async function createMessageForTarget(authUser, target, payload, extra = {}) {
         targetType: target.targetType,
         channelId: target.targetType === "channel" ? target.targetId : null,
         conversationId: target.targetType === "conversation" ? target.targetId : null,
-        threadParentId: extra.threadParentId || null,
+        threadParentId,
         replyToMessageId,
         attachments,
         mentions,
@@ -952,7 +986,8 @@ async function getMessageEditHistory(authUser, messageId) {
 }
 
 async function listThreadMessages(authUser, messageId, query) {
-  const message = await messagingModel.findMessageById(messageId);
+  const message = await messagingModel.findMessageById(messageId)
+    || await messagingModel.findMessageById(messageId, db, { includeDeleted: true });
   await assertMessageAccess(authUser, message);
 
   const limit = parseLimit(query.limit, 50, 100);
@@ -991,6 +1026,7 @@ async function replyInThread(authUser, messageId, payload) {
 
   return createMessageForTarget(authUser, target, payload, {
     threadParentId: parent.id,
+    allowThreadReplyInAnnouncement: true,
   });
 }
 
@@ -1027,6 +1063,7 @@ async function addReaction(authUser, messageId, payload) {
 
 async function removeReaction(authUser, messageId, emoji) {
   const normalizedEmoji = normalizeRequiredString(emoji, "emoji");
+  assert(EMOJI_PATTERN.test(normalizedEmoji), "emoji is invalid.", 422);
 
   const client = await db.pool.connect();
   try {
@@ -1034,7 +1071,8 @@ async function removeReaction(authUser, messageId, emoji) {
 
     const message = await messagingModel.findMessageById(messageId, client);
     await assertMessageAccess(authUser, message, client);
-    await messagingModel.removeReaction(messageId, authUser.id, normalizedEmoji, client);
+    const removedReaction = await messagingModel.removeReaction(messageId, authUser.id, normalizedEmoji, client);
+    assert(removedReaction, "Resource not found.", 404);
 
     const audience = await resolveTargetAudience(message.target_type, message.target_type === "channel" ? message.channel_id : message.conversation_id, client);
     await client.query("COMMIT");
@@ -1074,7 +1112,8 @@ async function pinMessage(authUser, messageId) {
     await client.query("BEGIN");
 
     const message = await messagingModel.findMessageById(messageId, client);
-    assert(message?.target_type === "channel", "You do not have permission to perform this action.", 403);
+    assert(message, "Resource not found.", 404);
+    assert(message.target_type === "channel", "You do not have permission to perform this action.", 403);
     const access = await assertMessageAccess(authUser, message, client);
     assert(canModerateChannel(access.context.accessContext, access.context.membership), "You do not have permission to perform this action.", 403);
 
@@ -1110,7 +1149,8 @@ async function unpinMessage(authUser, messageId) {
     await client.query("BEGIN");
 
     const message = await messagingModel.findMessageById(messageId, client);
-    assert(message?.target_type === "channel", "You do not have permission to perform this action.", 403);
+    assert(message, "Resource not found.", 404);
+    assert(message.target_type === "channel", "You do not have permission to perform this action.", 403);
     const access = await assertMessageAccess(authUser, message, client);
     assert(canModerateChannel(access.context.accessContext, access.context.membership), "You do not have permission to perform this action.", 403);
 
@@ -1182,7 +1222,8 @@ async function addBookmark(authUser, payload) {
 
 async function removeBookmark(authUser, messageId) {
   const normalizedMessageId = normalizeRequiredString(messageId, "messageId");
-  await messagingModel.removeBookmark(authUser.id, normalizedMessageId);
+  const removedBookmark = await messagingModel.removeBookmark(authUser.id, normalizedMessageId);
+  assert(removedBookmark, "Resource not found.", 404);
 }
 
 function toPollResponse(poll, voteRows) {

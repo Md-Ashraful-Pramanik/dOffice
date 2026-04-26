@@ -1319,6 +1319,10 @@ function validateCreatePollPayload(req, res, next) {
     return res.status(422).json({ errors: { options: ["must be an array of non-empty strings"] } });
   }
 
+  if (poll.options.length < 2) {
+    return res.status(422).json({ errors: { options: ["must contain at least two choices"] } });
+  }
+
   if (poll.multipleChoice !== undefined && typeof poll.multipleChoice !== "boolean") {
     return res.status(422).json({ errors: { multipleChoice: ["must be a boolean"] } });
   }
@@ -1327,8 +1331,10 @@ function validateCreatePollPayload(req, res, next) {
     return res.status(422).json({ errors: { anonymous: ["must be a boolean"] } });
   }
 
-  if (poll.expiresAt !== undefined && poll.expiresAt !== null && !isNonEmptyString(poll.expiresAt)) {
-    return res.status(422).json({ errors: { expiresAt: ["must be a valid ISO date string or null"] } });
+  if (poll.expiresAt !== undefined && poll.expiresAt !== null) {
+    if (!isNonEmptyString(poll.expiresAt) || Number.isNaN(Date.parse(poll.expiresAt))) {
+      return res.status(422).json({ errors: { expiresAt: ["must be a valid ISO date string or null"] } });
+    }
   }
 
   next();
