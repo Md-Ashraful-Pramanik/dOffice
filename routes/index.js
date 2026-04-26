@@ -10,6 +10,10 @@ const delegationRoutes = require("./delegationRoutes");
 const channelRoutes = require("./channelRoutes");
 const conversationRoutes = require("./conversationRoutes");
 const messageRoutes = require("./messageRoutes");
+const moderationRoutes = require("./moderationRoutes");
+const fileRoutes = require("./fileRoutes");
+const keyRoutes = require("./keyRoutes");
+const notificationRoutes = require("./notificationRoutes");
 
 const router = express.Router();
 
@@ -23,5 +27,9 @@ router.use(delegationRoutes);
 router.use(channelRoutes);
 router.use(conversationRoutes);
 router.use(messageRoutes);
+router.use(moderationRoutes);
+router.use(fileRoutes);
+router.use(keyRoutes);
+router.use(notificationRoutes);
 
 module.exports = router;

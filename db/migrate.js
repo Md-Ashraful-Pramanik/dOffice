@@ -1470,6 +1470,177 @@ async function runMigrations() {
       );
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_message_reports (
+        id VARCHAR(64) PRIMARY KEY,
+        org_id VARCHAR(64) NOT NULL REFERENCES doffice_organizations(id) ON DELETE CASCADE,
+        message_id VARCHAR(64) NOT NULL REFERENCES doffice_messages(id) ON DELETE CASCADE,
+        reported_by VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        reason VARCHAR(32) NOT NULL,
+        details TEXT,
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        action VARCHAR(32),
+        notes TEXT,
+        resolved_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        resolved_at TIMESTAMPTZ,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_doffice_message_reports_active_unique
+      ON doffice_message_reports(message_id, reported_by)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_message_reports_org_status
+      ON doffice_message_reports(org_id, status, created_at DESC)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_message_reports_message
+      ON doffice_message_reports(message_id)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_uploaded_files (
+        id VARCHAR(64) PRIMARY KEY,
+        org_id VARCHAR(64) NOT NULL REFERENCES doffice_organizations(id) ON DELETE CASCADE,
+        uploaded_by VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        context VARCHAR(32) NOT NULL,
+        context_id VARCHAR(64),
+        filename VARCHAR(255) NOT NULL,
+        mime_type VARCHAR(255) NOT NULL,
+        size BIGINT NOT NULL,
+        storage_path TEXT NOT NULL,
+        deleted_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_uploaded_files_org
+      ON doffice_uploaded_files(org_id, created_at DESC)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_uploaded_files_uploader
+      ON doffice_uploaded_files(uploaded_by)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_user_devices (
+        id VARCHAR(64) PRIMARY KEY,
+        user_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        name VARCHAR(255),
+        session_id VARCHAR(64),
+        identity_key_fingerprint VARCHAR(255),
+        last_seen_at TIMESTAMPTZ,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_doffice_user_devices_active
+      ON doffice_user_devices(user_id, id)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_user_devices_user
+      ON doffice_user_devices(user_id, updated_at DESC)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_user_prekeys (
+        user_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        device_id VARCHAR(64) NOT NULL REFERENCES doffice_user_devices(id) ON DELETE CASCADE,
+        identity_key TEXT NOT NULL,
+        signed_pre_key JSONB NOT NULL,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, device_id)
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_user_one_time_prekeys (
+        id BIGSERIAL PRIMARY KEY,
+        user_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        device_id VARCHAR(64) NOT NULL REFERENCES doffice_user_devices(id) ON DELETE CASCADE,
+        key_id INTEGER NOT NULL,
+        public_key TEXT NOT NULL,
+        consumed_at TIMESTAMPTZ,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_doffice_one_time_prekeys_active
+      ON doffice_user_one_time_prekeys(user_id, device_id, key_id)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_one_time_prekeys_available
+      ON doffice_user_one_time_prekeys(user_id, device_id, created_at ASC)
+      WHERE deleted_at IS NULL AND consumed_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_notifications (
+        id VARCHAR(64) PRIMARY KEY,
+        user_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        type VARCHAR(32) NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        body TEXT,
+        link TEXT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        read BOOLEAN NOT NULL DEFAULT FALSE,
+        read_at TIMESTAMPTZ,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_notifications_user_created
+      ON doffice_notifications(user_id, created_at DESC)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_notifications_user_unread
+      ON doffice_notifications(user_id, read)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_notification_preferences (
+        user_id VARCHAR(64) PRIMARY KEY REFERENCES doffice_users(id) ON DELETE CASCADE,
+        preferences JSONB NOT NULL,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");

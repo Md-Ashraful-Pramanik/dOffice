@@ -99,6 +99,15 @@ async function setChannelMemberRole(req, res, next) {
   }
 }
 
+async function setSlowMode(req, res, next) {
+  try {
+    const response = await channelService.setSlowMode(req.auth.user, req.params.channelId, req.body);
+    res.status(200).json(response);
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   listChannels,
   getChannel,
@@ -111,4 +120,5 @@ module.exports = {
   removeMember,
   listChannelMembers,
   setChannelMemberRole,
+  setSlowMode,
 };

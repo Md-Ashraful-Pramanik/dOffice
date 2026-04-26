@@ -1,6 +1,7 @@
 const express = require("express");
 
 const messageController = require("../controllers/messageController");
+const moderationController = require("../controllers/moderationController");
 const pollController = require("../controllers/pollController");
 const { requireAuth } = require("../middleware/authMiddleware");
 const {
@@ -14,6 +15,7 @@ const {
   validateCreatePollPayload,
   validateVotePollPayload,
   validateSearchMessagesQuery,
+  validateReportMessagePayload,
 } = require("../middleware/validationMiddleware");
 
 const router = express.Router();
@@ -56,6 +58,13 @@ router.delete(
   "/messages/:messageId",
   requireAuth,
   messageController.deleteMessage
+);
+
+router.post(
+  "/messages/:messageId/report",
+  requireAuth,
+  validateReportMessagePayload,
+  moderationController.reportMessage
 );
 
 router.get(

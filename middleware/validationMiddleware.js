@@ -1430,6 +1430,199 @@ function validateSearchMessagesQuery(req, res, next) {
   next();
 }
 
+function validateReportMessagePayload(req, res, next) {
+  const payload = req.body || {};
+
+  if (rejectUnknownPayloadFields(res, payload, ["reason", "details"])) {
+    return;
+  }
+
+  const reason = typeof payload.reason === "string" ? payload.reason.trim().toLowerCase() : "";
+  const allowedReasons = new Set(["spam", "harassment", "inappropriate", "other"]);
+  if (!allowedReasons.has(reason)) {
+    return res.status(422).json({
+      errors: {
+        reason: ["must be one of: spam, harassment, inappropriate, other"],
+      },
+    });
+  }
+
+  if (payload.details !== undefined && payload.details !== null && typeof payload.details !== "string") {
+    return res.status(422).json({ errors: { details: ["must be a string"] } });
+  }
+
+  next();
+}
+
+function validateListReportsQuery(req, res, next) {
+  const { status, limit, offset } = req.query || {};
+
+  if (rejectUnknownQueryParams(res, req.query, ["status", "limit", "offset"])) {
+    return;
+  }
+
+  if (status !== undefined) {
+    const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
+    if (!["pending", "reviewed", "dismissed"].includes(normalized)) {
+      return res.status(422).json({ errors: { status: ["must be one of: pending, reviewed, dismissed"] } });
+    }
+  }
+
+  if (limit !== undefined && parseNonNegativeInteger(limit) === null) {
+    return res.status(422).json({ errors: { limit: ["must be a non-negative integer"] } });
+  }
+
+  if (offset !== undefined && parseNonNegativeInteger(offset) === null) {
+    return res.status(422).json({ errors: { offset: ["must be a non-negative integer"] } });
+  }
+
+  next();
+}
+
+function validateResolveReportPayload(req, res, next) {
+  const payload = req.body || {};
+
+  if (rejectUnknownPayloadFields(res, payload, ["action", "notes"])) {
+    return;
+  }
+
+  const action = typeof payload.action === "string" ? payload.action.trim().toLowerCase() : "";
+  const allowedActions = new Set(["dismiss", "warn_user", "delete_message", "suspend_user"]);
+
+  if (!allowedActions.has(action)) {
+    return res.status(422).json({
+      errors: {
+        action: ["must be one of: dismiss, warn_user, delete_message, suspend_user"],
+      },
+    });
+  }
+
+  if (payload.notes !== undefined && payload.notes !== null && typeof payload.notes !== "string") {
+    return res.status(422).json({ errors: { notes: ["must be a string"] } });
+  }
+
+  next();
+}
+
+function validateSetSlowModePayload(req, res, next) {
+  const payload = req.body || {};
+
+  if (rejectUnknownPayloadFields(res, payload, ["intervalSeconds"])) {
+    return;
+  }
+
+  const value = payload.intervalSeconds;
+  if (!Number.isInteger(value) || value < 0) {
+    return res.status(422).json({ errors: { intervalSeconds: ["must be a non-negative integer"] } });
+  }
+
+  next();
+}
+
+function validateUploadFilePayload(req, res, next) {
+  const { orgId, context, contextId } = req.body || {};
+
+  if (!req.file) {
+    return res.status(422).json({ errors: { file: ["can't be blank"] } });
+  }
+
+  if (!isNonEmptyString(orgId)) {
+    return res.status(422).json({ errors: { orgId: ["can't be blank"] } });
+  }
+
+  const normalizedContext = typeof context === "string" ? context.trim().toLowerCase() : "";
+  if (!["channel", "conversation", "avatar"].includes(normalizedContext)) {
+    return res.status(422).json({ errors: { context: ["must be one of: channel, conversation, avatar"] } });
+  }
+
+  if (normalizedContext !== "avatar" && !isNonEmptyString(contextId)) {
+    return res.status(422).json({ errors: { contextId: ["can't be blank"] } });
+  }
+
+  next();
+}
+
+function validateUploadPreKeyBundlePayload(req, res, next) {
+  const keys = req.body?.keys;
+  if (!isPlainObject(keys)) {
+    return res.status(422).json({ errors: { keys: ["can't be blank"] } });
+  }
+
+  if (!isNonEmptyString(keys.identityKey)) {
+    return res.status(422).json({ errors: { identityKey: ["can't be blank"] } });
+  }
+
+  if (!isPlainObject(keys.signedPreKey)) {
+    return res.status(422).json({ errors: { signedPreKey: ["can't be blank"] } });
+  }
+
+  if (!Number.isInteger(keys.signedPreKey.keyId) || !isNonEmptyString(keys.signedPreKey.publicKey) || !isNonEmptyString(keys.signedPreKey.signature)) {
+    return res.status(422).json({ errors: { signedPreKey: ["is invalid"] } });
+  }
+
+  if (!Array.isArray(keys.oneTimePreKeys) || !keys.oneTimePreKeys.length) {
+    return res.status(422).json({ errors: { oneTimePreKeys: ["can't be blank"] } });
+  }
+
+  const invalid = keys.oneTimePreKeys.some((item) => !isPlainObject(item) || !Number.isInteger(item.keyId) || !isNonEmptyString(item.publicKey));
+  if (invalid) {
+    return res.status(422).json({ errors: { oneTimePreKeys: ["contains invalid entries"] } });
+  }
+
+  next();
+}
+
+function validateUserPreKeyBundleQuery(req, res, next) {
+  if (rejectUnknownQueryParams(res, req.query, ["deviceId"])) {
+    return;
+  }
+
+  if (req.query?.deviceId !== undefined && !isNonEmptyString(req.query.deviceId)) {
+    return res.status(422).json({ errors: { deviceId: ["must be a non-empty string"] } });
+  }
+
+  next();
+}
+
+function validateListNotificationsQuery(req, res, next) {
+  const { unread, type, limit, offset } = req.query || {};
+
+  if (rejectUnknownQueryParams(res, req.query, ["unread", "type", "limit", "offset"])) {
+    return;
+  }
+
+  if (unread !== undefined && unread !== "true" && unread !== "false") {
+    return res.status(422).json({ errors: { unread: ["must be true or false"] } });
+  }
+
+  if (type !== undefined) {
+    const normalized = typeof type === "string" ? type.trim() : "";
+    if (!["mention", "reply", "reaction", "channel_invite", "system"].includes(normalized)) {
+      return res.status(422).json({ errors: { type: ["is invalid"] } });
+    }
+  }
+
+  if (limit !== undefined && parseNonNegativeInteger(limit) === null) {
+    return res.status(422).json({ errors: { limit: ["must be a non-negative integer"] } });
+  }
+
+  if (offset !== undefined && parseNonNegativeInteger(offset) === null) {
+    return res.status(422).json({ errors: { offset: ["must be a non-negative integer"] } });
+  }
+
+  next();
+}
+
+function validateUpdateNotificationPreferencesPayload(req, res, next) {
+  const preferences = req.body?.preferences;
+
+  if (!isPlainObject(preferences)) {
+    return res.status(422).json({ errors: { preferences: ["can't be blank"] } });
+  }
+
+  next();
+}
+
 module.exports = {
   validateRegisterPayload,
   validateLoginPayload,
@@ -1480,4 +1673,13 @@ module.exports = {
   validateCreatePollPayload,
   validateVotePollPayload,
   validateSearchMessagesQuery,
+  validateReportMessagePayload,
+  validateListReportsQuery,
+  validateResolveReportPayload,
+  validateSetSlowModePayload,
+  validateUploadFilePayload,
+  validateUploadPreKeyBundlePayload,
+  validateUserPreKeyBundleQuery,
+  validateListNotificationsQuery,
+  validateUpdateNotificationPreferencesPayload,
 };

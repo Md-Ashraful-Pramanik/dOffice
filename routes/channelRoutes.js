@@ -10,6 +10,7 @@ const {
   validateInviteChannelMembersPayload,
   validateListChannelMembersQuery,
   validateSetChannelMemberRolePayload,
+  validateSetSlowModePayload,
   validateListCategoriesQuery,
   validateCreateCategoryPayload,
   validateUpdateCategoryPayload,
@@ -82,6 +83,13 @@ router.put(
   requireAuth,
   validateSetChannelMemberRolePayload,
   channelController.setChannelMemberRole
+);
+
+router.put(
+  "/channels/:channelId/slow-mode",
+  requireAuth,
+  validateSetSlowModePayload,
+  channelController.setSlowMode
 );
 
 router.delete(

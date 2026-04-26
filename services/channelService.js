@@ -623,6 +623,33 @@ async function setChannelMemberRole(authUser, channelId, userId, payload) {
   }
 }
 
+async function setSlowMode(authUser, channelId, payload) {
+  const client = await db.pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const { membership } = await getChannelContext(authUser, channelId, client);
+    assert(isChannelAdmin(membership), "You do not have permission to perform this action.", 403);
+
+    const intervalSeconds = Number(payload?.intervalSeconds);
+    assert(Number.isInteger(intervalSeconds) && intervalSeconds >= 0, "intervalSeconds must be a non-negative integer.", 422);
+
+    await channelModel.updateChannel(channelId, { slowModeInterval: intervalSeconds }, client);
+    const updated = await channelModel.findById(channelId, client);
+
+    await client.query("COMMIT");
+    return {
+      channel: toChannel(updated),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   listChannels,
   getChannel,
@@ -635,4 +662,5 @@ module.exports = {
   removeMember,
   listChannelMembers,
   setChannelMemberRole,
+  setSlowMode,
 };

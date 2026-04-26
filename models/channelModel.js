@@ -224,6 +224,10 @@ async function updateChannel(channelId, updates = {}, client = db) {
     setField("e2ee", Boolean(updates.e2ee), "::boolean");
   }
 
+  if (Object.prototype.hasOwnProperty.call(updates, "slowModeInterval")) {
+    setField("slow_mode_interval", Number(updates.slowModeInterval), "::int");
+  }
+
   if (Object.prototype.hasOwnProperty.call(updates, "deletedBy")) {
     setField("deleted_by", updates.deletedBy);
   }
