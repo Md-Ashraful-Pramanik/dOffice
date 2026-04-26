@@ -469,11 +469,13 @@ async function listMessages(filters = {}, client = db) {
     targetType,
     targetId,
     limit = 50,
+    offset = 0,
     beforeCursor = null,
     afterCursor = null,
     threadParentId = null,
     pinnedOnly = false,
     includeThreadReplies = false,
+    sort = "desc",
   } = filters;
 
   const params = [];
@@ -498,7 +500,9 @@ async function listMessages(filters = {}, client = db) {
     where.push("m.is_pinned = TRUE");
   }
 
-  let orderSql = "ORDER BY m.created_at DESC, m.id DESC";
+  let orderSql = sort === "asc"
+    ? "ORDER BY m.created_at ASC, m.id ASC"
+    : "ORDER BY m.created_at DESC, m.id DESC";
   if (beforeCursor) {
     params.push(beforeCursor.created_at);
     params.push(beforeCursor.id);
@@ -518,12 +522,13 @@ async function listMessages(filters = {}, client = db) {
     orderSql = "ORDER BY m.created_at ASC, m.id ASC";
   }
 
-  const queryParams = [...params, limit + 1];
+  const queryParams = [...params, limit + 1, offset];
   const result = await client.query(
     `${MESSAGE_BASE_SELECT}
      WHERE ${where.join(" AND ")}
      ${orderSql}
-     LIMIT $${queryParams.length}`,
+     LIMIT $${queryParams.length - 1}
+     OFFSET $${queryParams.length}`,
     queryParams
   );
 

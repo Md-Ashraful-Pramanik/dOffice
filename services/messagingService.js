@@ -279,7 +279,8 @@ function createDmKey(userA, userB) {
   return [userA, userB].sort().join("::");
 }
 
-async function getChannelAccessContext(authUser, channelId, client = db) {
+async function getChannelAccessContext(authUser, channelId, client = db, options = {}) {
+  const { allowAdminBypassPrivateMembership = false } = options;
   const accessContext = await getAccessContext(authUser, client);
   const channel = await channelModel.findById(channelId, client);
   assert(channel, "Resource not found.", 404);
@@ -287,7 +288,9 @@ async function getChannelAccessContext(authUser, channelId, client = db) {
 
   const membership = await channelModel.findMembership(channelId, authUser.id, client);
   if (channel.type === "private") {
-    assert(membership, "You do not have permission to perform this action.", 403);
+    const adminBypass = allowAdminBypassPrivateMembership
+      && (accessContext.isSuperAdmin || accessContext.isOrgAdmin);
+    assert(membership || adminBypass, "You do not have permission to perform this action.", 403);
   }
 
   return {
@@ -297,23 +300,37 @@ async function getChannelAccessContext(authUser, channelId, client = db) {
   };
 }
 
-async function getConversationContext(authUser, conversationId, client = db) {
+async function getConversationContext(authUser, conversationId, client = db, options = {}) {
+  const { allowAdminBypassParticipant = false } = options;
   const conversation = await messagingModel.findConversationById(conversationId, client);
   assert(conversation, "Resource not found.", 404);
 
   const participant = await messagingModel.findConversationParticipant(conversationId, authUser.id, client);
-  assert(participant, "You do not have permission to perform this action.", 403);
+  let accessContext = null;
+
+  if (!participant && allowAdminBypassParticipant) {
+    accessContext = await getAccessContext(authUser, client);
+  }
+
+  const adminBypass = Boolean(accessContext && (accessContext.isSuperAdmin || accessContext.isOrgAdmin));
+  assert(participant || adminBypass, "You do not have permission to perform this action.", 403);
 
   return {
     conversation,
     participant,
+    accessContext,
   };
 }
 
-function canManageConversationParticipant(conversation, participant, authUserId) {
+function canManageConversationParticipant(conversation, participant, authUserId, accessContext = null) {
   return Boolean(
     conversation.type === "group"
-      && (participant?.role === "admin" || conversation.created_by === authUserId)
+      && (
+        participant?.role === "admin"
+        || conversation.created_by === authUserId
+        || accessContext?.isSuperAdmin
+        || accessContext?.isOrgAdmin
+      )
   );
 }
 
@@ -321,14 +338,16 @@ async function getConversationParticipantManagementContext(authUser, conversatio
   const conversation = await messagingModel.findConversationById(conversationId, client);
   assert(conversation, "Resource not found.", 404);
 
+  const accessContext = await getAccessContext(authUser, client);
   const participant = await messagingModel.findConversationParticipant(conversationId, authUser.id, client);
-  const canManage = canManageConversationParticipant(conversation, participant, authUser.id);
+  const canManage = canManageConversationParticipant(conversation, participant, authUser.id, accessContext);
 
   assert(canManage, "You do not have permission to perform this action.", 403);
 
   return {
     conversation,
     participant,
+    accessContext,
   };
 }
 
@@ -720,18 +739,26 @@ async function getMessageCursor(messageId, client = db) {
   };
 }
 
-async function assertMessageAccess(authUser, messageRow, client = db) {
+async function assertMessageAccess(authUser, messageRow, client = db, options = {}) {
+  const {
+    allowAdminBypassPrivateMembership = false,
+    allowAdminBypassConversationParticipant = false,
+  } = options;
   assert(messageRow, "Resource not found.", 404);
 
   if (messageRow.target_type === "channel") {
-    const context = await getChannelAccessContext(authUser, messageRow.channel_id, client);
+    const context = await getChannelAccessContext(authUser, messageRow.channel_id, client, {
+      allowAdminBypassPrivateMembership,
+    });
     return {
       kind: "channel",
       context,
     };
   }
 
-  const context = await getConversationContext(authUser, messageRow.conversation_id, client);
+  const context = await getConversationContext(authUser, messageRow.conversation_id, client, {
+    allowAdminBypassParticipant: allowAdminBypassConversationParticipant,
+  });
   return {
     kind: "conversation",
     context,
@@ -986,7 +1013,10 @@ async function deleteMessage(authUser, messageId) {
     await client.query("BEGIN");
 
     const message = await messagingModel.findMessageById(messageId, client);
-    const access = await assertMessageAccess(authUser, message, client);
+    const access = await assertMessageAccess(authUser, message, client, {
+      allowAdminBypassPrivateMembership: true,
+      allowAdminBypassConversationParticipant: true,
+    });
 
     let allowed = message.sender_id === authUser.id;
     if (!allowed && access.kind === "channel") {
@@ -994,6 +1024,10 @@ async function deleteMessage(authUser, messageId) {
     }
     if (!allowed && access.kind === "conversation") {
       allowed = access.context.conversation.type === "group" && access.context.participant?.role === "admin";
+    }
+
+    if (!allowed && access.kind === "conversation") {
+      allowed = Boolean(access.context.accessContext?.isSuperAdmin || access.context.accessContext?.isOrgAdmin);
     }
 
     assert(allowed, "You do not have permission to perform this action.", 403);
@@ -1047,11 +1081,12 @@ async function listThreadMessages(authUser, messageId, query) {
     targetType: message.target_type,
     targetId: message.target_type === "channel" ? message.channel_id : message.conversation_id,
     threadParentId: message.id,
-    limit: limit + offset + 1,
+    sort: "asc",
+    limit,
+    offset,
   });
 
-  const ordered = rows.reverse().slice(offset);
-  return buildMessagesResponse(ordered, null, {
+  return buildMessagesResponse(rows, null, {
     limit,
     reverse: false,
   });
@@ -1166,7 +1201,9 @@ async function pinMessage(authUser, messageId) {
     const message = await messagingModel.findMessageById(messageId, client);
     assert(message, "Resource not found.", 404);
     assert(message.target_type === "channel", "You do not have permission to perform this action.", 403);
-    const access = await assertMessageAccess(authUser, message, client);
+    const access = await assertMessageAccess(authUser, message, client, {
+      allowAdminBypassPrivateMembership: true,
+    });
     assert(canModerateChannel(access.context.accessContext, access.context.membership), "You do not have permission to perform this action.", 403);
 
     await messagingModel.updateMessage(
@@ -1203,7 +1240,9 @@ async function unpinMessage(authUser, messageId) {
     const message = await messagingModel.findMessageById(messageId, client);
     assert(message, "Resource not found.", 404);
     assert(message.target_type === "channel", "You do not have permission to perform this action.", 403);
-    const access = await assertMessageAccess(authUser, message, client);
+    const access = await assertMessageAccess(authUser, message, client, {
+      allowAdminBypassPrivateMembership: true,
+    });
     assert(canModerateChannel(access.context.accessContext, access.context.membership), "You do not have permission to perform this action.", 403);
 
     await messagingModel.updateMessage(
