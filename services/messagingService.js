@@ -57,17 +57,22 @@ function normalizeOptionalString(value) {
   return normalized || null;
 }
 
-function normalizeDistinctIds(userIds = [], fieldName = "userIds") {
+function normalizeDistinctIds(userIds = [], fieldName = "userIds", options = {}) {
   assert(Array.isArray(userIds), `${fieldName} must be an array of user IDs.`, 422);
+
+  const { rejectDuplicates = false } = options;
 
   const seen = new Set();
   const normalized = [];
   userIds.forEach((value) => {
     const id = normalizeRequiredString(value, fieldName.slice(0, -1) || "userId");
-    if (!seen.has(id)) {
-      seen.add(id);
-      normalized.push(id);
+    if (seen.has(id)) {
+      assert(!rejectDuplicates, `${fieldName} contains duplicate user IDs.`, 422);
+      return;
     }
+
+    seen.add(id);
+    normalized.push(id);
   });
 
   return normalized;
@@ -317,17 +322,13 @@ async function getConversationParticipantManagementContext(authUser, conversatio
   assert(conversation, "Resource not found.", 404);
 
   const participant = await messagingModel.findConversationParticipant(conversationId, authUser.id, client);
-  const accessContext = await getAccessContext(authUser, client);
-  const canManage = canManageConversationParticipant(conversation, participant, authUser.id)
-    || accessContext.isSuperAdmin
-    || accessContext.isOrgAdmin;
+  const canManage = canManageConversationParticipant(conversation, participant, authUser.id);
 
   assert(canManage, "You do not have permission to perform this action.", 403);
 
   return {
     conversation,
     participant,
-    accessContext,
   };
 }
 
@@ -483,7 +484,11 @@ async function createConversation(authUser, payload) {
     assert(conversationPayload, "conversation is required.", 422);
 
     const type = normalizeConversationType(conversationPayload.type);
-    const participantIds = normalizeDistinctIds(conversationPayload.participantIds || [], "participantIds")
+    const participantIds = normalizeDistinctIds(
+      conversationPayload.participantIds || [],
+      "participantIds",
+      { rejectDuplicates: true }
+    )
       .filter((userId) => userId !== authUser.id);
 
     if (type === "dm") {
@@ -591,8 +596,13 @@ async function addConversationParticipants(authUser, conversationId, payload) {
     const { conversation } = await getConversationParticipantManagementContext(authUser, conversationId, client);
     assert(conversation.type === "group", "You do not have permission to perform this action.", 403);
 
-    const userIds = normalizeDistinctIds(payload?.userIds || [], "userIds").filter((userId) => userId !== authUser.id);
+    const userIds = normalizeDistinctIds(payload?.userIds || [], "userIds", { rejectDuplicates: true });
     assert(userIds.length > 0, "userIds must be a non-empty array of user IDs.", 422);
+
+    const existingParticipants = await messagingModel.listConversationParticipants([conversationId], client);
+    const existingParticipantIds = new Set(existingParticipants.map((row) => row.user_id));
+    const duplicateParticipantIds = userIds.filter((userId) => existingParticipantIds.has(userId));
+    assert(!duplicateParticipantIds.length, "One or more users are already participants in the conversation.", 422);
 
     const users = await messagingModel.findUsersByIds(userIds, client);
     const userMap = new Map(users.map((user) => [user.id, user]));
@@ -760,6 +770,10 @@ async function createMessageForTarget(authUser, target, payload, extra = {}) {
   let threadParentId = extra.threadParentId || null;
 
   if (target.kind === "channel") {
+    assert(format !== "encrypted", "format is invalid.", 422);
+  }
+
+  if (target.kind === "conversation" && !target.context.conversation.e2ee) {
     assert(format !== "encrypted", "format is invalid.", 422);
   }
 

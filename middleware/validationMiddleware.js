@@ -65,6 +65,21 @@ function parseNonNegativeInteger(value) {
   return parsed;
 }
 
+function hasDuplicateStrings(values = []) {
+  const seen = new Set();
+
+  for (const value of values) {
+    const normalized = typeof value === "string" ? value.trim() : value;
+    if (seen.has(normalized)) {
+      return true;
+    }
+
+    seen.add(normalized);
+  }
+
+  return false;
+}
+
 function getUnknownKeys(value, allowedKeys = []) {
   if (!isPlainObject(value)) {
     return [];
@@ -1123,6 +1138,10 @@ function validateCreateConversationPayload(req, res, next) {
     return res.status(422).json({ errors: { participantIds: ["must be an array of user IDs"] } });
   }
 
+  if (hasDuplicateStrings(conversation.participantIds)) {
+    return res.status(422).json({ errors: { participantIds: ["contains duplicate user IDs"] } });
+  }
+
   next();
 }
 
@@ -1135,6 +1154,10 @@ function validateConversationParticipantsPayload(req, res, next) {
 
   if (!Array.isArray(userIds) || !userIds.length || !userIds.every(isNonEmptyString)) {
     return res.status(422).json({ errors: { userIds: ["must be a non-empty array of user IDs"] } });
+  }
+
+  if (hasDuplicateStrings(userIds)) {
+    return res.status(422).json({ errors: { userIds: ["contains duplicate user IDs"] } });
   }
 
   next();
