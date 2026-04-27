@@ -432,8 +432,8 @@ async function deleteChannel(authUser, channelId) {
   try {
     await client.query("BEGIN");
 
-    const { accessContext, membership } = await getChannelContext(authUser, channelId, client);
-    assert(canManageChannel(accessContext, membership), "You do not have permission to perform this action.", 403);
+    const { membership } = await getChannelContext(authUser, channelId, client);
+    assert(isChannelAdmin(membership), "You do not have permission to perform this action.", 403);
 
     await channelModel.softDeleteChannel(channelId, authUser.id, client);
     await channelModel.softDeleteAllMembers(channelId, client);
@@ -629,8 +629,8 @@ async function setSlowMode(authUser, channelId, payload) {
   try {
     await client.query("BEGIN");
 
-    const { accessContext, membership } = await getChannelContext(authUser, channelId, client);
-    assert(canManageChannel(accessContext, membership), "You do not have permission to perform this action.", 403);
+    const { membership } = await getChannelContext(authUser, channelId, client);
+    assert(isChannelAdmin(membership), "You do not have permission to perform this action.", 403);
 
     const intervalSeconds = Number(payload?.intervalSeconds);
     assert(Number.isInteger(intervalSeconds) && intervalSeconds >= 0, "intervalSeconds must be a non-negative integer.", 422);

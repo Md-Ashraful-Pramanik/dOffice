@@ -405,6 +405,21 @@ async function listChannelMemberUserIds(channelId, client = db) {
   return result.rows.map((row) => row.user_id);
 }
 
+async function findLatestChannelMessageBySender(channelId, senderId, client = db) {
+  const result = await client.query(
+    `SELECT id, created_at
+     FROM doffice_messages
+     WHERE channel_id = $1::varchar(64)
+       AND sender_id = $2::varchar(64)
+       AND deleted_at IS NULL
+     ORDER BY created_at DESC, id DESC
+     LIMIT 1`,
+    [channelId, senderId]
+  );
+
+  return result.rows[0] || null;
+}
+
 async function createMessage(payload, client = db) {
   const {
     id,
@@ -1024,6 +1039,7 @@ module.exports = {
   countConversationAdmins,
   listConversations,
   listChannelMemberUserIds,
+  findLatestChannelMessageBySender,
   createMessage,
   findMessageById,
   listMessages,

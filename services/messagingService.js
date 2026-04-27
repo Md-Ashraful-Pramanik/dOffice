@@ -16,6 +16,30 @@ const MESSAGE_FORMATS = new Set(["plaintext", "markdown", "encrypted"]);
 const MESSAGE_TYPES = new Set(["regular", "poll"]);
 const EMOJI_PATTERN = /^[^\s]{1,64}$/u;
 const MENTION_USERNAME_PATTERN = /(^|[\s([{"'])@([a-zA-Z0-9._-]{1,64})\b/g;
+const DEFAULT_NOTIFICATION_PREFERENCES = {
+  email: {
+    mentions: true,
+    directMessages: true,
+    channelActivity: false,
+  },
+  push: {
+    mentions: true,
+    directMessages: true,
+    channelActivity: true,
+  },
+  inApp: {
+    mentions: true,
+    directMessages: true,
+    channelActivity: true,
+  },
+  muteChannels: [],
+  doNotDisturb: {
+    enabled: false,
+    from: "22:00",
+    to: "08:00",
+    timezone: "Asia/Dhaka",
+  },
+};
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -161,6 +185,108 @@ function toNotificationBodySnippet(body) {
   }
 
   return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized;
+}
+
+function mergeNotificationPreferences(preferences) {
+  return {
+    email: {
+      ...DEFAULT_NOTIFICATION_PREFERENCES.email,
+      ...(preferences?.email || {}),
+    },
+    push: {
+      ...DEFAULT_NOTIFICATION_PREFERENCES.push,
+      ...(preferences?.push || {}),
+    },
+    inApp: {
+      ...DEFAULT_NOTIFICATION_PREFERENCES.inApp,
+      ...(preferences?.inApp || {}),
+    },
+    muteChannels: Array.isArray(preferences?.muteChannels)
+      ? preferences.muteChannels.filter((value) => typeof value === "string" && value.trim())
+      : DEFAULT_NOTIFICATION_PREFERENCES.muteChannels,
+    doNotDisturb: {
+      ...DEFAULT_NOTIFICATION_PREFERENCES.doNotDisturb,
+      ...(preferences?.doNotDisturb || {}),
+    },
+  };
+}
+
+function getCurrentTimeForTimezone(timezone) {
+  try {
+    const formatter = new Intl.DateTimeFormat("en-GB", {
+      timeZone: timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+
+    const parts = formatter.formatToParts(new Date());
+    const hour = parts.find((part) => part.type === "hour")?.value;
+    const minute = parts.find((part) => part.type === "minute")?.value;
+    return hour && minute ? `${hour}:${minute}` : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function isTimeWithinWindow(current, from, to) {
+  if (!current || !from || !to) {
+    return false;
+  }
+
+  if (from === to) {
+    return true;
+  }
+
+  if (from < to) {
+    return current >= from && current < to;
+  }
+
+  return current >= from || current < to;
+}
+
+function isNotificationSuppressedByPreferences(preferences, type, targetType, targetId) {
+  const merged = mergeNotificationPreferences(preferences);
+
+  if (type === "mention" && merged.inApp.mentions === false) {
+    return true;
+  }
+
+  if (type === "system") {
+    return false;
+  }
+
+  if (targetType === "channel" && merged.muteChannels.includes(targetId)) {
+    return true;
+  }
+
+  if (merged.doNotDisturb?.enabled) {
+    const current = getCurrentTimeForTimezone(merged.doNotDisturb.timezone);
+    if (isTimeWithinWindow(current, merged.doNotDisturb.from, merged.doNotDisturb.to)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function toRealtimeNotification(row) {
+  return {
+    id: row.id,
+    type: row.type,
+    title: row.title,
+    body: row.body,
+    link: row.link,
+    read: Boolean(row.read),
+    createdAt: row.created_at,
+  };
+}
+
+function createRateLimitError(message, retryAfter) {
+  const error = new Error(message);
+  error.status = 429;
+  error.retryAfter = retryAfter;
+  return error;
 }
 
 function normalizeEncryption(value, format) {
@@ -539,22 +665,50 @@ async function createMentionNotifications(authUser, target, message, mentionedUs
   const title = `${authUser.username || authUser.id} mentioned you in ${locationLabel}`;
   const body = toNotificationBodySnippet(message.body);
 
-  const rows = mentionedUserIds.map((userId) => ({
-    id: generateId("notif"),
-    userId,
-    type: "mention",
-    title,
-    body,
-    link,
-    metadata: {
-      messageId: message.id,
-      senderId: authUser.id,
-      targetType: target.targetType,
-      targetId: target.targetId,
-    },
-  }));
+  const rows = [];
+  for (const userId of mentionedUserIds) {
+    const existingPreferences = await notificationModel.findNotificationPreferences(userId, client);
+    if (isNotificationSuppressedByPreferences(existingPreferences?.preferences, "mention", target.targetType, target.targetId)) {
+      continue;
+    }
+
+    rows.push({
+      id: generateId("notif"),
+      userId,
+      type: "mention",
+      title,
+      body,
+      link,
+      metadata: {
+        messageId: message.id,
+        senderId: authUser.id,
+        targetType: target.targetType,
+        targetId: target.targetId,
+      },
+    });
+  }
 
   return notificationModel.createNotifications(rows, client);
+}
+
+async function enforceChannelSlowMode(authUser, channel, client = db) {
+  const intervalSeconds = Number(channel?.slow_mode_interval || 0);
+  if (!Number.isInteger(intervalSeconds) || intervalSeconds <= 0) {
+    return;
+  }
+
+  const latestMessage = await messagingModel.findLatestChannelMessageBySender(channel.id, authUser.id, client);
+  if (!latestMessage?.created_at) {
+    return;
+  }
+
+  const secondsSinceLastMessage = Math.floor((Date.now() - new Date(latestMessage.created_at).getTime()) / 1000);
+  if (secondsSinceLastMessage >= intervalSeconds) {
+    return;
+  }
+
+  const retryAfter = Math.max(1, intervalSeconds - Math.max(0, secondsSinceLastMessage));
+  throw createRateLimitError("Too many requests. Please try again later.", retryAfter);
 }
 
 async function listConversations(authUser, query) {
@@ -987,6 +1141,10 @@ async function createMessageForTarget(authUser, target, payload, extra = {}) {
   try {
     await client.query("BEGIN");
 
+    if (target.kind === "channel") {
+      await enforceChannelSlowMode(authUser, target.context.channel, client);
+    }
+
     const messageId = generateId("msg");
     const createdAt = new Date().toISOString();
     const audience = await resolveTargetAudience(target.targetType, target.targetId, client);
@@ -1033,17 +1191,14 @@ async function createMessageForTarget(authUser, target, payload, extra = {}) {
     }
 
     const created = await messagingModel.findMessageById(messageId, client);
-    await createMentionNotifications(authUser, target, created, resolvedMentions, client);
+    const createdNotifications = await createMentionNotifications(authUser, target, created, resolvedMentions, client);
     await client.query("COMMIT");
 
     const response = await buildSingleMessageResponse(created);
     broadcastToUsers(audience, "message:new", response.message);
-    if (resolvedMentions.length) {
-      broadcastToUsers(resolvedMentions, "notification:new", {
-        type: "mention",
-        messageId: created.id,
-      });
-    }
+    createdNotifications.forEach((notification) => {
+      broadcastToUsers([notification.user_id], "notification:new", toRealtimeNotification(notification));
+    });
 
     return response;
   } catch (error) {
@@ -1493,6 +1648,8 @@ async function createPoll(authUser, channelId, payload) {
   const client = await db.pool.connect();
   try {
     await client.query("BEGIN");
+
+    await enforceChannelSlowMode(authUser, context.channel, client);
 
     const messageId = generateId("msg");
     const pollId = generateId("poll");

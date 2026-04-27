@@ -1,5 +1,13 @@
 const channelService = require("../services/channelService");
 
+function setAudit(res, action, metadata) {
+  res.locals.auditAction = action;
+  res.locals.auditMetadata = {
+    ...(res.locals.auditMetadata || {}),
+    ...(metadata || {}),
+  };
+}
+
 async function listChannels(req, res, next) {
   try {
     const response = await channelService.listChannels(req.auth.user, req.params.orgId, req.query);
@@ -102,6 +110,10 @@ async function setChannelMemberRole(req, res, next) {
 async function setSlowMode(req, res, next) {
   try {
     const response = await channelService.setSlowMode(req.auth.user, req.params.channelId, req.body);
+    setAudit(res, "channel.slow_mode.update", {
+      channelId: req.params.channelId,
+      intervalSeconds: req.body?.intervalSeconds,
+    });
     res.status(200).json(response);
   } catch (error) {
     next(error);

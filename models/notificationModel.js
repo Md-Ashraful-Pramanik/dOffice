@@ -25,11 +25,19 @@ async function listNotifications(userId, filters = {}, client = db) {
 
   const totalResult = await client.query(
     `SELECT
-       COUNT(*)::int AS total_count,
-       COUNT(*) FILTER (WHERE n.read = FALSE)::int AS unread_count
+       COUNT(*)::int AS total_count
      FROM doffice_notifications n
      ${whereSql}`,
     params
+  );
+
+  const unreadResult = await client.query(
+    `SELECT COUNT(*)::int AS unread_count
+     FROM doffice_notifications
+     WHERE user_id = $1::varchar(64)
+       AND deleted_at IS NULL
+       AND read = FALSE`,
+    [userId]
   );
 
   const dataParams = [...params, limit, offset];
@@ -46,7 +54,7 @@ async function listNotifications(userId, filters = {}, client = db) {
   return {
     notifications: result.rows,
     totalCount: totalResult.rows[0]?.total_count || 0,
-    unreadCount: totalResult.rows[0]?.unread_count || 0,
+    unreadCount: unreadResult.rows[0]?.unread_count || 0,
   };
 }
 

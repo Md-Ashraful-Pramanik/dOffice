@@ -40,7 +40,40 @@ function toFileObject(row) {
   };
 }
 
+async function assertChannelFileAccess(authUser, file, client = db) {
+  const accessContext = await getAccessContext(authUser, client);
+  assertOrgAccess(file.org_id, accessContext);
+
+  const channel = await channelModel.findById(file.context_id, client);
+  assert(channel, "Resource not found.", 404);
+
+  if (channel.type === "private") {
+    const membership = await channelModel.findMembership(channel.id, authUser.id, client);
+    assert(membership || accessContext.isOrgAdmin || accessContext.isSuperAdmin, "You do not have permission to perform this action.", 403);
+  }
+
+  return accessContext;
+}
+
+async function assertConversationFileAccess(authUser, file, client = db) {
+  const conversation = await messagingModel.findConversationById(file.context_id, client);
+  assert(conversation, "Resource not found.", 404);
+
+  const participant = await messagingModel.findConversationParticipant(file.context_id, authUser.id, client);
+  assert(participant, "You do not have permission to perform this action.", 403);
+
+  return null;
+}
+
 async function assertFileAccess(authUser, file, client = db) {
+  if (file.context === "conversation") {
+    return assertConversationFileAccess(authUser, file, client);
+  }
+
+  if (file.context === "channel") {
+    return assertChannelFileAccess(authUser, file, client);
+  }
+
   const accessContext = await getAccessContext(authUser, client);
   assertOrgAccess(file.org_id, accessContext);
   return accessContext;
@@ -57,6 +90,13 @@ async function validateFileContext(authUser, context, contextId, orgId, client =
     const channel = await channelModel.findById(contextId, client);
     assert(channel, "Resource not found.", 404);
     assert(channel.org_id === orgId, "Resource not found.", 404);
+
+    if (channel.type === "private") {
+      const accessContext = await getAccessContext(authUser, client);
+      const membership = await channelModel.findMembership(channel.id, authUser.id, client);
+      assert(membership || accessContext.isOrgAdmin || accessContext.isSuperAdmin, "You do not have permission to perform this action.", 403);
+    }
+
     return;
   }
 
@@ -152,7 +192,7 @@ async function deleteFile(authUser, fileId) {
     assert(file, "Resource not found.", 404);
 
     const accessContext = await assertFileAccess(authUser, file, client);
-    const canDelete = file.uploaded_by === authUser.id || accessContext.isOrgAdmin || accessContext.isSuperAdmin;
+    const canDelete = file.uploaded_by === authUser.id || Boolean(accessContext?.isOrgAdmin || accessContext?.isSuperAdmin);
     assert(canDelete, "You do not have permission to perform this action.", 403);
 
     await fileModel.softDeleteFile(fileId, authUser.id, client);

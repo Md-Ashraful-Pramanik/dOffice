@@ -39,12 +39,18 @@ function errorHandler(error, req, res, next) {
   const status = error.status || 500;
   const message = error.message || "An unexpected error occurred. Please try again.";
 
-  res.status(status).json({
+  const payload = {
     error: {
       status,
       message,
     },
-  });
+  };
+
+  if (status === 429 && Number.isInteger(error.retryAfter) && error.retryAfter > 0) {
+    payload.error.retryAfter = error.retryAfter;
+  }
+
+  res.status(status).json(payload);
 }
 
 module.exports = {
