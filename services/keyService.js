@@ -42,10 +42,7 @@ function toDeviceResponse(device, currentSessionId) {
     name: device.name || "Unnamed device",
     identityKeyFingerprint: device.identity_key_fingerprint || "",
     lastSeen: device.last_seen_at,
-    current: Boolean(
-      (currentSessionId && device.session_id && device.session_id === currentSessionId)
-      || (currentSessionId && device.id === currentSessionId)
-    ),
+    current: Boolean(currentSessionId && device.session_id && device.session_id === currentSessionId),
   };
 }
 
@@ -70,7 +67,17 @@ async function uploadPreKeyBundle(authUser, sessionId, payload) {
     assert(oneTimePreKeys.every(isValidPreKey), "oneTimePreKeys contains invalid entries.", 422);
 
     const explicitDeviceId = normalizeOptionalString(payload?.deviceId);
-    const deviceId = explicitDeviceId || sessionId || generateId("dev");
+    let deviceId = explicitDeviceId;
+
+    if (!deviceId && sessionId) {
+      const existingBySession = await keyModel.findDeviceBySessionId(authUser.id, sessionId, client);
+      deviceId = existingBySession?.id || null;
+    }
+
+    if (!deviceId) {
+      deviceId = generateId("dev");
+    }
+
     const identityKeyFingerprint = computeFingerprint(identityKey);
 
     await keyModel.upsertDevice(
@@ -122,10 +129,18 @@ async function getUserPreKeyBundle(authUser, userId, query) {
   try {
     await client.query("BEGIN");
 
-    const bundle = await keyModel.findBundleForUser(userId, { deviceId: query?.deviceId || null }, client);
+    const bundle = await keyModel.findBundleForUser(
+      userId,
+      {
+        deviceId: query?.deviceId || null,
+        allowSessionIdFallback: true,
+      },
+      client
+    );
     assert(bundle, "Resource not found.", 404);
 
     const oneTimePreKey = await keyModel.consumeOneTimePreKey(userId, bundle.device_id, client);
+    assert(oneTimePreKey, "No available one-time pre-keys for the requested user/device.", 404);
 
     await client.query("COMMIT");
 
@@ -135,7 +150,10 @@ async function getUserPreKeyBundle(authUser, userId, query) {
         deviceId: bundle.device_id,
         identityKey: bundle.identity_key,
         signedPreKey: bundle.signed_pre_key,
-        oneTimePreKey,
+        oneTimePreKey: {
+          keyId: oneTimePreKey.key_id,
+          publicKey: oneTimePreKey.public_key,
+        },
       },
     };
   } catch (error) {

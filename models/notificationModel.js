@@ -112,10 +112,51 @@ async function upsertNotificationPreferences(userId, preferences, client = db) {
   return result.rows[0] || null;
 }
 
+async function createNotifications(notifications = [], client = db) {
+  const rows = Array.isArray(notifications) ? notifications.filter(Boolean) : [];
+  if (!rows.length) {
+    return [];
+  }
+
+  const inserted = [];
+  for (const item of rows) {
+    const result = await client.query(
+      `INSERT INTO doffice_notifications (
+        id, user_id, type, title, body, link, metadata
+      ) VALUES (
+        $1::varchar(64),
+        $2::varchar(64),
+        $3::varchar(32),
+        $4::varchar(255),
+        $5::text,
+        $6::text,
+        COALESCE($7::jsonb, '{}'::jsonb)
+      )
+      RETURNING id, user_id, type, title, body, link, metadata, read, created_at`,
+      [
+        item.id,
+        item.userId,
+        item.type,
+        item.title,
+        item.body || null,
+        item.link || null,
+        item.metadata ? JSON.stringify(item.metadata) : JSON.stringify({}),
+      ]
+    );
+
+    if (result.rows[0]) {
+      inserted.push(result.rows[0]);
+    }
+  }
+
+  return inserted;
+}
+
 module.exports = {
   listNotifications,
   markNotificationRead,
   markAllNotificationsRead,
   findNotificationPreferences,
   upsertNotificationPreferences,
+  createNotifications,
 };

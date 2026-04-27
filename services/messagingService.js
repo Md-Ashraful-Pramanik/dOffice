@@ -1,6 +1,7 @@
 const db = require("../config/db");
 const channelModel = require("../models/channelModel");
 const messagingModel = require("../models/messagingModel");
+const notificationModel = require("../models/notificationModel");
 const { generateId } = require("../utils/id");
 const {
   assert,
@@ -14,6 +15,7 @@ const CONVERSATION_TYPES = new Set(["dm", "group"]);
 const MESSAGE_FORMATS = new Set(["plaintext", "markdown", "encrypted"]);
 const MESSAGE_TYPES = new Set(["regular", "poll"]);
 const EMOJI_PATTERN = /^[^\s]{1,64}$/u;
+const MENTION_USERNAME_PATTERN = /(^|[\s([{"'])@([a-zA-Z0-9._-]{1,64})\b/g;
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -125,6 +127,40 @@ function normalizeMentions(value) {
   }
 
   return normalizeDistinctIds(value, "mentions");
+}
+
+function extractMentionedUsernames(body) {
+  if (!body || typeof body !== "string") {
+    return [];
+  }
+
+  const usernames = new Set();
+  let match = MENTION_USERNAME_PATTERN.exec(body);
+
+  while (match) {
+    const username = String(match[2] || "").trim().toLowerCase();
+    if (username) {
+      usernames.add(username);
+    }
+
+    match = MENTION_USERNAME_PATTERN.exec(body);
+  }
+
+  MENTION_USERNAME_PATTERN.lastIndex = 0;
+  return [...usernames];
+}
+
+function toNotificationBodySnippet(body) {
+  if (!body || typeof body !== "string") {
+    return null;
+  }
+
+  const normalized = body.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized;
 }
 
 function normalizeEncryption(value, format) {
@@ -445,6 +481,59 @@ async function resolveTargetAudience(targetType, targetId, client = db) {
 
   const participants = await messagingModel.listConversationParticipants([targetId], client);
   return participants.map((participant) => participant.user_id);
+}
+
+async function resolveMentionsForMessage(authUser, body, explicitMentionIds, audience, client = db) {
+  const audienceSet = new Set(Array.isArray(audience) ? audience : []);
+
+  const explicitUsers = explicitMentionIds.length
+    ? await messagingModel.findUsersByIds(explicitMentionIds, client)
+    : [];
+
+  const usernames = extractMentionedUsernames(body);
+  const usernameUsers = usernames.length
+    ? await messagingModel.findUsersByUsernames(usernames, client)
+    : [];
+
+  const mergedIds = new Set();
+  explicitUsers.forEach((user) => mergedIds.add(user.id));
+  usernameUsers.forEach((user) => mergedIds.add(user.id));
+
+  return [...mergedIds].filter((userId) => userId !== authUser.id && audienceSet.has(userId));
+}
+
+async function createMentionNotifications(authUser, target, message, mentionedUserIds, client = db) {
+  if (!Array.isArray(mentionedUserIds) || !mentionedUserIds.length) {
+    return [];
+  }
+
+  const locationLabel = target.targetType === "channel"
+    ? `#${target.context.channel.name}`
+    : (target.context.conversation.name || "a conversation");
+
+  const link = target.targetType === "channel"
+    ? `/channels/${target.targetId}/messages/${message.id}`
+    : `/conversations/${target.targetId}/messages/${message.id}`;
+
+  const title = `${authUser.username || authUser.id} mentioned you in ${locationLabel}`;
+  const body = toNotificationBodySnippet(message.body);
+
+  const rows = mentionedUserIds.map((userId) => ({
+    id: generateId("notif"),
+    userId,
+    type: "mention",
+    title,
+    body,
+    link,
+    metadata: {
+      messageId: message.id,
+      senderId: authUser.id,
+      targetType: target.targetType,
+      targetId: target.targetId,
+    },
+  }));
+
+  return notificationModel.createNotifications(rows, client);
 }
 
 async function listConversations(authUser, query) {
@@ -879,6 +968,9 @@ async function createMessageForTarget(authUser, target, payload, extra = {}) {
 
     const messageId = generateId("msg");
     const createdAt = new Date().toISOString();
+    const audience = await resolveTargetAudience(target.targetType, target.targetId, client);
+    const resolvedMentions = await resolveMentionsForMessage(authUser, body, mentions, audience, client);
+
     await messagingModel.createMessage(
       {
         id: messageId,
@@ -892,7 +984,7 @@ async function createMessageForTarget(authUser, target, payload, extra = {}) {
         threadParentId,
         replyToMessageId,
         attachments,
-        mentions,
+        mentions: resolvedMentions,
         encryption,
         pollId: extra.pollId || null,
       },
@@ -913,11 +1005,17 @@ async function createMessageForTarget(authUser, target, payload, extra = {}) {
     }
 
     const created = await messagingModel.findMessageById(messageId, client);
-    const audience = await resolveTargetAudience(target.targetType, target.targetId, client);
+    await createMentionNotifications(authUser, target, created, resolvedMentions, client);
     await client.query("COMMIT");
 
     const response = await buildSingleMessageResponse(created);
     broadcastToUsers(audience, "message:new", response.message);
+    if (resolvedMentions.length) {
+      broadcastToUsers(resolvedMentions, "notification:new", {
+        type: "mention",
+        messageId: created.id,
+      });
+    }
 
     return response;
   } catch (error) {

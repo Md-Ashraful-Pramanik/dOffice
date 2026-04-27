@@ -58,6 +58,27 @@ async function findUsersByIds(userIds = [], client = db) {
   return result.rows;
 }
 
+async function findUsersByUsernames(usernames = [], client = db) {
+  if (!Array.isArray(usernames) || !usernames.length) {
+    return [];
+  }
+
+  const normalized = [...new Set(usernames.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean))];
+  if (!normalized.length) {
+    return [];
+  }
+
+  const result = await client.query(
+    `SELECT id, username, name, avatar, org_id, status
+     FROM doffice_users
+     WHERE LOWER(username) = ANY($1::text[])
+       AND deleted_at IS NULL`,
+    [normalized]
+  );
+
+  return result.rows;
+}
+
 async function createConversation(payload, client = db) {
   const { id, type, name, createdBy, e2ee, disappearingTimer, dmKey } = payload;
 
@@ -982,6 +1003,7 @@ async function searchMessages(filters = {}, client = db) {
 
 module.exports = {
   findUsersByIds,
+  findUsersByUsernames,
   createConversation,
   touchConversation,
   updateConversation,

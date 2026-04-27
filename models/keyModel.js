@@ -96,14 +96,22 @@ async function replaceOneTimePreKeys(payload, client = db) {
 }
 
 async function findBundleForUser(userId, options = {}, client = db) {
-  const { deviceId = null } = options;
+  const {
+    deviceId = null,
+    allowSessionIdFallback = true,
+  } = options;
 
   const params = [userId];
   const where = ["pk.user_id = $1::varchar(64)", "pk.deleted_at IS NULL", "d.deleted_at IS NULL"];
 
   if (deviceId) {
     params.push(deviceId);
-    where.push(`pk.device_id = $${params.length}::varchar(64)`);
+    const deviceParam = `$${params.length}::varchar(64)`;
+    if (allowSessionIdFallback) {
+      where.push(`(pk.device_id = ${deviceParam} OR d.session_id = ${deviceParam})`);
+    } else {
+      where.push(`pk.device_id = ${deviceParam}`);
+    }
   }
 
   const result = await client.query(
@@ -124,6 +132,21 @@ async function findBundleForUser(userId, options = {}, client = db) {
      ORDER BY d.last_seen_at DESC NULLS LAST, d.created_at DESC
      LIMIT 1`,
     params
+  );
+
+  return result.rows[0] || null;
+}
+
+async function findDeviceBySessionId(userId, sessionId, client = db) {
+  const result = await client.query(
+    `SELECT id, user_id, name, session_id, identity_key_fingerprint, last_seen_at
+     FROM doffice_user_devices
+     WHERE user_id = $1::varchar(64)
+       AND session_id = $2::varchar(64)
+       AND deleted_at IS NULL
+     ORDER BY updated_at DESC, created_at DESC
+     LIMIT 1`,
+    [userId, sessionId]
   );
 
   return result.rows[0] || null;
@@ -217,6 +240,7 @@ module.exports = {
   upsertPreKeyBundle,
   replaceOneTimePreKeys,
   findBundleForUser,
+  findDeviceBySessionId,
   consumeOneTimePreKey,
   listDevices,
   findDeviceById,
