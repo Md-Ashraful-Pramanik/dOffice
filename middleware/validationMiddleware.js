@@ -1620,6 +1620,80 @@ function validateUpdateNotificationPreferencesPayload(req, res, next) {
     return res.status(422).json({ errors: { preferences: ["can't be blank"] } });
   }
 
+  const allowedTopLevel = ["email", "push", "inApp", "muteChannels", "doNotDisturb"];
+  if (rejectUnknownPayloadFields(res, preferences, allowedTopLevel)) {
+    return;
+  }
+
+  const validateChannelPreferenceSet = (value, key) => {
+    if (!isPlainObject(value)) {
+      return `${key} must be an object`;
+    }
+
+    const allowed = ["mentions", "directMessages", "channelActivity"];
+    const unknown = getUnknownKeys(value, allowed);
+    if (unknown.length) {
+      return `${key} contains invalid field(s): ${unknown.join(", ")}`;
+    }
+
+    for (const field of allowed) {
+      if (Object.prototype.hasOwnProperty.call(value, field) && typeof value[field] !== "boolean") {
+        return `${key}.${field} must be a boolean`;
+      }
+    }
+
+    return null;
+  };
+
+  for (const key of ["email", "push", "inApp"]) {
+    if (Object.prototype.hasOwnProperty.call(preferences, key)) {
+      const error = validateChannelPreferenceSet(preferences[key], key);
+      if (error) {
+        return res.status(422).json({ errors: { preferences: [error] } });
+      }
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(preferences, "muteChannels")) {
+    if (!Array.isArray(preferences.muteChannels)) {
+      return res.status(422).json({ errors: { preferences: ["muteChannels must be an array"] } });
+    }
+
+    const invalidMuteChannel = preferences.muteChannels.some((channelId) => !isNonEmptyString(channelId));
+    if (invalidMuteChannel) {
+      return res.status(422).json({ errors: { preferences: ["muteChannels must contain non-empty strings"] } });
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(preferences, "doNotDisturb")) {
+    const dnd = preferences.doNotDisturb;
+
+    if (!isPlainObject(dnd)) {
+      return res.status(422).json({ errors: { preferences: ["doNotDisturb must be an object"] } });
+    }
+
+    if (rejectUnknownPayloadFields(res, dnd, ["enabled", "from", "to", "timezone"])) {
+      return;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(dnd, "enabled") && typeof dnd.enabled !== "boolean") {
+      return res.status(422).json({ errors: { preferences: ["doNotDisturb.enabled must be a boolean"] } });
+    }
+
+    const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
+    if (Object.prototype.hasOwnProperty.call(dnd, "from") && (typeof dnd.from !== "string" || !timeRegex.test(dnd.from))) {
+      return res.status(422).json({ errors: { preferences: ["doNotDisturb.from must be in HH:mm format"] } });
+    }
+
+    if (Object.prototype.hasOwnProperty.call(dnd, "to") && (typeof dnd.to !== "string" || !timeRegex.test(dnd.to))) {
+      return res.status(422).json({ errors: { preferences: ["doNotDisturb.to must be in HH:mm format"] } });
+    }
+
+    if (Object.prototype.hasOwnProperty.call(dnd, "timezone") && !isNonEmptyString(dnd.timezone)) {
+      return res.status(422).json({ errors: { preferences: ["doNotDisturb.timezone must be a non-empty string"] } });
+    }
+  }
+
   next();
 }
 

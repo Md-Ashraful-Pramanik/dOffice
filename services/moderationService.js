@@ -178,6 +178,7 @@ async function resolveReport(authUser, orgId, reportId, payload) {
     const report = await moderationModel.findReportById(reportId, client);
     assert(report, "Resource not found.", 404);
     assert(report.org_id === orgId, "Resource not found.", 404);
+    assert(report.status === "pending", "Report has already been resolved.", 422);
 
     const action = normalizeRequiredString(payload?.action, "action").toLowerCase();
     assert(RESOLVE_ACTIONS.has(action), "action is invalid.", 422);

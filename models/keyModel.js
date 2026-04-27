@@ -153,7 +153,7 @@ async function consumeOneTimePreKey(userId, deviceId, client = db) {
 
 async function listDevices(userId, client = db) {
   const result = await client.query(
-    `SELECT id, name, identity_key_fingerprint, last_seen_at
+    `SELECT id, name, session_id, identity_key_fingerprint, last_seen_at
      FROM doffice_user_devices
      WHERE user_id = $1::varchar(64)
        AND deleted_at IS NULL
@@ -166,7 +166,7 @@ async function listDevices(userId, client = db) {
 
 async function findDeviceById(deviceId, client = db) {
   const result = await client.query(
-    `SELECT id, user_id, name, identity_key_fingerprint, last_seen_at
+    `SELECT id, user_id, name, session_id, identity_key_fingerprint, last_seen_at
      FROM doffice_user_devices
      WHERE id = $1::varchar(64)
        AND deleted_at IS NULL

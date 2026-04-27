@@ -24,7 +24,7 @@ const DEFAULT_PREFERENCES = {
     enabled: false,
     from: "22:00",
     to: "08:00",
-    timezone: "UTC",
+    timezone: "Asia/Dhaka",
   },
 };
 
@@ -97,6 +97,85 @@ function mergePreferences(input = {}) {
   return next;
 }
 
+function validateBooleanField(value, fieldPath) {
+  assert(typeof value === "boolean", `${fieldPath} must be a boolean.`, 422);
+}
+
+function validateChannelPreferenceObject(value, fieldPath) {
+  assert(value && typeof value === "object" && !Array.isArray(value), `${fieldPath} must be an object.`, 422);
+
+  const allowedKeys = new Set(["mentions", "directMessages", "channelActivity"]);
+  const unknownKeys = Object.keys(value).filter((key) => !allowedKeys.has(key));
+  assert(!unknownKeys.length, `${fieldPath} contains invalid field(s): ${unknownKeys.join(", ")}.`, 422);
+
+  if (Object.prototype.hasOwnProperty.call(value, "mentions")) {
+    validateBooleanField(value.mentions, `${fieldPath}.mentions`);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, "directMessages")) {
+    validateBooleanField(value.directMessages, `${fieldPath}.directMessages`);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, "channelActivity")) {
+    validateBooleanField(value.channelActivity, `${fieldPath}.channelActivity`);
+  }
+}
+
+function validateTimeString(value, fieldPath) {
+  assert(typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value), `${fieldPath} must be in HH:mm format.`, 422);
+}
+
+function validateNotificationPreferencesPayload(preferencesPayload) {
+  assert(preferencesPayload && typeof preferencesPayload === "object" && !Array.isArray(preferencesPayload), "preferences is required.", 422);
+
+  const allowedTopLevel = new Set(["email", "push", "inApp", "muteChannels", "doNotDisturb"]);
+  const unknownTopLevel = Object.keys(preferencesPayload).filter((key) => !allowedTopLevel.has(key));
+  assert(!unknownTopLevel.length, `preferences contains invalid field(s): ${unknownTopLevel.join(", ")}.`, 422);
+
+  if (Object.prototype.hasOwnProperty.call(preferencesPayload, "email")) {
+    validateChannelPreferenceObject(preferencesPayload.email, "preferences.email");
+  }
+
+  if (Object.prototype.hasOwnProperty.call(preferencesPayload, "push")) {
+    validateChannelPreferenceObject(preferencesPayload.push, "preferences.push");
+  }
+
+  if (Object.prototype.hasOwnProperty.call(preferencesPayload, "inApp")) {
+    validateChannelPreferenceObject(preferencesPayload.inApp, "preferences.inApp");
+  }
+
+  if (Object.prototype.hasOwnProperty.call(preferencesPayload, "muteChannels")) {
+    assert(Array.isArray(preferencesPayload.muteChannels), "preferences.muteChannels must be an array of channel IDs.", 422);
+    const invalidMuteChannel = preferencesPayload.muteChannels.some((channelId) => typeof channelId !== "string" || !channelId.trim());
+    assert(!invalidMuteChannel, "preferences.muteChannels must contain non-empty string values.", 422);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(preferencesPayload, "doNotDisturb")) {
+    const dnd = preferencesPayload.doNotDisturb;
+    assert(dnd && typeof dnd === "object" && !Array.isArray(dnd), "preferences.doNotDisturb must be an object.", 422);
+
+    const allowedDndKeys = new Set(["enabled", "from", "to", "timezone"]);
+    const unknownDndKeys = Object.keys(dnd).filter((key) => !allowedDndKeys.has(key));
+    assert(!unknownDndKeys.length, `preferences.doNotDisturb contains invalid field(s): ${unknownDndKeys.join(", ")}.`, 422);
+
+    if (Object.prototype.hasOwnProperty.call(dnd, "enabled")) {
+      validateBooleanField(dnd.enabled, "preferences.doNotDisturb.enabled");
+    }
+
+    if (Object.prototype.hasOwnProperty.call(dnd, "from")) {
+      validateTimeString(dnd.from, "preferences.doNotDisturb.from");
+    }
+
+    if (Object.prototype.hasOwnProperty.call(dnd, "to")) {
+      validateTimeString(dnd.to, "preferences.doNotDisturb.to");
+    }
+
+    if (Object.prototype.hasOwnProperty.call(dnd, "timezone")) {
+      assert(typeof dnd.timezone === "string" && dnd.timezone.trim().length > 0, "preferences.doNotDisturb.timezone must be a non-empty string.", 422);
+    }
+  }
+}
+
 async function ensurePreferences(userId) {
   const existing = await notificationModel.findNotificationPreferences(userId);
   if (existing) {
@@ -149,9 +228,21 @@ async function getNotificationPreferences(authUser) {
 
 async function updateNotificationPreferences(authUser, payload) {
   const preferencesPayload = payload?.preferences;
-  assert(preferencesPayload && typeof preferencesPayload === "object" && !Array.isArray(preferencesPayload), "preferences is required.", 422);
+  validateNotificationPreferencesPayload(preferencesPayload);
 
-  const merged = mergePreferences(preferencesPayload);
+  const currentPreferences = await ensurePreferences(authUser.id);
+
+  const merged = mergePreferences({
+    ...currentPreferences,
+    ...preferencesPayload,
+    ...(preferencesPayload?.email ? { email: { ...currentPreferences.email, ...preferencesPayload.email } } : {}),
+    ...(preferencesPayload?.push ? { push: { ...currentPreferences.push, ...preferencesPayload.push } } : {}),
+    ...(preferencesPayload?.inApp ? { inApp: { ...currentPreferences.inApp, ...preferencesPayload.inApp } } : {}),
+    ...(preferencesPayload?.doNotDisturb
+      ? { doNotDisturb: { ...currentPreferences.doNotDisturb, ...preferencesPayload.doNotDisturb } }
+      : {}),
+  });
+
   const updated = await notificationModel.upsertNotificationPreferences(authUser.id, merged);
 
   return {

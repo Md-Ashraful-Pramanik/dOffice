@@ -2,7 +2,7 @@ const db = require("../config/db");
 const keyModel = require("../models/keyModel");
 const userModel = require("../models/userModel");
 const { generateId } = require("../utils/id");
-const { assert, getAccessContext } = require("./accessService");
+const { assert } = require("./accessService");
 
 function normalizeRequiredString(value, fieldName) {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -36,13 +36,16 @@ function buildDefaultDeviceName(authUser) {
   return `Device for ${authUser.username || authUser.id}`;
 }
 
-function toDeviceResponse(device, currentDeviceId) {
+function toDeviceResponse(device, currentSessionId) {
   return {
     id: device.id,
     name: device.name || "Unnamed device",
     identityKeyFingerprint: device.identity_key_fingerprint || "",
     lastSeen: device.last_seen_at,
-    current: device.id === currentDeviceId,
+    current: Boolean(
+      (currentSessionId && device.session_id && device.session_id === currentSessionId)
+      || (currentSessionId && device.id === currentSessionId)
+    ),
   };
 }
 
@@ -111,34 +114,43 @@ async function uploadPreKeyBundle(authUser, sessionId, payload) {
 }
 
 async function getUserPreKeyBundle(authUser, userId, query) {
+  const client = await db.pool.connect();
+
   const targetUser = await userModel.findById(userId);
   assert(targetUser, "Resource not found.", 404);
 
-  const accessContext = await getAccessContext(authUser);
-  const sameOrg = authUser.org_id && targetUser.org_id && authUser.org_id === targetUser.org_id;
-  assert(sameOrg || accessContext.isOrgAdmin || accessContext.isSuperAdmin, "You do not have permission to perform this action.", 403);
+  try {
+    await client.query("BEGIN");
 
-  const bundle = await keyModel.findBundleForUser(userId, { deviceId: query?.deviceId || null });
-  assert(bundle, "Resource not found.", 404);
+    const bundle = await keyModel.findBundleForUser(userId, { deviceId: query?.deviceId || null }, client);
+    assert(bundle, "Resource not found.", 404);
 
-  const oneTimePreKey = await keyModel.consumeOneTimePreKey(userId, bundle.device_id);
+    const oneTimePreKey = await keyModel.consumeOneTimePreKey(userId, bundle.device_id, client);
 
-  return {
-    keys: {
-      userId,
-      deviceId: bundle.device_id,
-      identityKey: bundle.identity_key,
-      signedPreKey: bundle.signed_pre_key,
-      oneTimePreKey,
-    },
-  };
+    await client.query("COMMIT");
+
+    return {
+      keys: {
+        userId,
+        deviceId: bundle.device_id,
+        identityKey: bundle.identity_key,
+        signedPreKey: bundle.signed_pre_key,
+        oneTimePreKey,
+      },
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function listUserDevices(authUser, currentSessionId) {
   const devices = await keyModel.listDevices(authUser.id);
 
   return {
-    devices: devices.map((device) => toDeviceResponse(device, currentSessionId)),
+    devices: devices.map((device) => toDeviceResponse(device, currentSessionId || null)),
   };
 }
 
@@ -155,10 +167,6 @@ async function getUserKeyFingerprint(authUser, userId) {
 
   const bundle = await keyModel.findBundleForUser(userId);
   assert(bundle, "Resource not found.", 404);
-
-  const accessContext = await getAccessContext(authUser);
-  const sameOrg = authUser.org_id && targetUser.org_id && authUser.org_id === targetUser.org_id;
-  assert(sameOrg || accessContext.isOrgAdmin || accessContext.isSuperAdmin, "You do not have permission to perform this action.", 403);
 
   return {
     fingerprint: {
