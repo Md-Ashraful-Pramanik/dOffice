@@ -12,7 +12,7 @@ async function listNotifications(userId, filters = {}, client = db) {
   const where = ["n.user_id = $1::varchar(64)", "n.deleted_at IS NULL"];
 
   if (typeof unread === "boolean") {
-    params.push(unread);
+    params.push(!unread);
     where.push(`n.read = $${params.length}::boolean`);
   }
 
