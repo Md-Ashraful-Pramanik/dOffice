@@ -58,7 +58,7 @@ async function findUsersByIds(userIds = [], client = db) {
   return result.rows;
 }
 
-async function findUsersByUsernames(usernames = [], client = db) {
+async function findUsersByUsernames(usernames = [], orgId = null, client = db) {
   if (!Array.isArray(usernames) || !usernames.length) {
     return [];
   }
@@ -68,12 +68,19 @@ async function findUsersByUsernames(usernames = [], client = db) {
     return [];
   }
 
+  const params = [normalized];
+  const conditions = ["LOWER(username) = ANY($1::text[])", "deleted_at IS NULL"];
+
+  if (orgId) {
+    params.push(orgId);
+    conditions.push(`org_id = $${params.length}::varchar(64)`);
+  }
+
   const result = await client.query(
     `SELECT id, username, name, avatar, org_id, status
      FROM doffice_users
-     WHERE LOWER(username) = ANY($1::text[])
-       AND deleted_at IS NULL`,
-    [normalized]
+     WHERE ${conditions.join(" AND ")}`,
+    params
   );
 
   return result.rows;

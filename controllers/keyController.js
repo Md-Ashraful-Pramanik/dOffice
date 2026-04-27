@@ -40,7 +40,7 @@ async function listUserDevices(req, res, next) {
 
 async function removeDevice(req, res, next) {
   try {
-    await keyService.removeDevice(req.auth.user, req.params.deviceId);
+    await keyService.removeDevice(req.auth.user, req.params.deviceId, req.auth.sessionId);
     setAudit(res, "device.remove", {
       deviceId: req.params.deviceId,
     });

@@ -1,5 +1,6 @@
 const db = require("../config/db");
 const keyModel = require("../models/keyModel");
+const sessionModel = require("../models/sessionModel");
 const userModel = require("../models/userModel");
 const { generateId } = require("../utils/id");
 const { assert } = require("./accessService");
@@ -172,11 +173,16 @@ async function listUserDevices(authUser, currentSessionId) {
   };
 }
 
-async function removeDevice(authUser, deviceId) {
+async function removeDevice(authUser, deviceId, currentSessionId) {
   const device = await keyModel.findDeviceById(deviceId);
   assert(device && device.user_id === authUser.id, "Resource not found.", 404);
 
   await keyModel.softDeleteDevice(deviceId, authUser.id);
+
+  // If the device being removed belongs to the current session, revoke that session to log the user out
+  if (currentSessionId && device.session_id && device.session_id === currentSessionId) {
+    await sessionModel.revokeSession(currentSessionId);
+  }
 }
 
 async function getUserKeyFingerprint(authUser, userId) {

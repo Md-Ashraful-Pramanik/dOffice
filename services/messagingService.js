@@ -483,23 +483,44 @@ async function resolveTargetAudience(targetType, targetId, client = db) {
   return participants.map((participant) => participant.user_id);
 }
 
-async function resolveMentionsForMessage(authUser, body, explicitMentionIds, audience, client = db) {
+async function resolveMentionsForMessage(authUser, body, explicitMentionIds, audience, client = db, options = {}) {
+  // mentionScope "org": for public channels — match org members by username without audience restriction.
+  // mentionScope "audience": for private channels and conversations — restrict to audience members only.
+  const { mentionScope = "audience", orgId = null } = options;
   const audienceSet = new Set(Array.isArray(audience) ? audience : []);
 
+  // Explicit mention IDs are always filtered to audience for safety
   const explicitUsers = explicitMentionIds.length
     ? await messagingModel.findUsersByIds(explicitMentionIds, client)
     : [];
 
   const usernames = extractMentionedUsernames(body);
+  // For org-scoped channels, find users by username within the org (no audience restriction).
+  // For audience-scoped targets, find any user with matching username then filter by audience.
   const usernameUsers = usernames.length
-    ? await messagingModel.findUsersByUsernames(usernames, client)
+    ? await messagingModel.findUsersByUsernames(usernames, mentionScope === "org" ? orgId : null, client)
     : [];
 
   const mergedIds = new Set();
-  explicitUsers.forEach((user) => mergedIds.add(user.id));
-  usernameUsers.forEach((user) => mergedIds.add(user.id));
 
-  return [...mergedIds].filter((userId) => userId !== authUser.id && audienceSet.has(userId));
+  // Explicit IDs: always require audience membership
+  explicitUsers.forEach((user) => {
+    if (user.id !== authUser.id && audienceSet.has(user.id)) {
+      mergedIds.add(user.id);
+    }
+  });
+
+  // Username-based mentions:
+  // - org scope: include any matching org member (not just channel members)
+  // - audience scope: include only audience members
+  usernameUsers.forEach((user) => {
+    if (user.id === authUser.id) return;
+    if (mentionScope === "org" || audienceSet.has(user.id)) {
+      mergedIds.add(user.id);
+    }
+  });
+
+  return [...mergedIds];
 }
 
 async function createMentionNotifications(authUser, target, message, mentionedUserIds, client = db) {
@@ -969,7 +990,14 @@ async function createMessageForTarget(authUser, target, payload, extra = {}) {
     const messageId = generateId("msg");
     const createdAt = new Date().toISOString();
     const audience = await resolveTargetAudience(target.targetType, target.targetId, client);
-    const resolvedMentions = await resolveMentionsForMessage(authUser, body, mentions, audience, client);
+
+    // For public/announcement/cross-org channels, mentions are scoped to org members;
+    // for private channels and conversations, only audience members (channel members / participants) can be mentioned.
+    const mentionOptions = target.kind === "channel" && target.context.channel.type !== "private"
+      ? { mentionScope: "org", orgId: target.context.channel.org_id }
+      : { mentionScope: "audience", orgId: null };
+
+    const resolvedMentions = await resolveMentionsForMessage(authUser, body, mentions, audience, client, mentionOptions);
 
     await messagingModel.createMessage(
       {
