@@ -401,6 +401,7 @@ function toMessage(row, reactions = []) {
     pinned: Boolean(row.is_pinned),
     edited: Boolean(row.edited),
     editedAt: row.edited_at,
+    clientMsgId: row.client_msg_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.encryption ? { encryption: row.encryption } : {}),
@@ -1093,6 +1094,7 @@ async function createMessageForTarget(authUser, target, payload, extra = {}) {
   const format = normalizeMessageFormat(messagePayload.format, "plaintext");
   const attachments = normalizeAttachments(messagePayload.attachments);
   const mentions = normalizeMentions(messagePayload.mentions);
+  const clientMsgId = normalizeOptionalString(messagePayload.clientMsgId);
   const encryption = normalizeEncryption(messagePayload.encryption, format);
   const replyToMessageId = normalizeOptionalString(messagePayload.replyTo);
   let threadParentId = extra.threadParentId || null;
@@ -1172,6 +1174,7 @@ async function createMessageForTarget(authUser, target, payload, extra = {}) {
         attachments,
         mentions: resolvedMentions,
         encryption,
+        clientMsgId,
         pollId: extra.pollId || null,
       },
       client

@@ -3,10 +3,134 @@ const jwt = require("jsonwebtoken");
 
 const sessionModel = require("../models/sessionModel");
 const userModel = require("../models/userModel");
+const channelModel = require("../models/channelModel");
+const messagingModel = require("../models/messagingModel");
+const realtimeModel = require("../models/realtimeModel");
+const auditService = require("../services/auditService");
+const { generateId } = require("../utils/id");
 const { sha256 } = require("../utils/crypto");
 
 let websocketServer = null;
 const socketsByUserId = new Map();
+
+const SOCKET_TARGET_TYPES = new Set(["channel", "conversation"]);
+const PRESENCE_STATUSES = new Set(["online", "away", "busy", "offline"]);
+const RTC_SIGNAL_TYPES = new Set(["offer", "answer", "ice-candidate"]);
+let messagingServiceRef = null;
+
+function getMessagingService() {
+  if (!messagingServiceRef) {
+    // Lazy import to avoid circular dependency during module initialization.
+    messagingServiceRef = require("../services/messagingService");
+  }
+
+  return messagingServiceRef;
+}
+
+function createError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+function normalizeRequiredString(value, fieldName) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized) {
+    throw createError(422, `${fieldName} is required.`);
+  }
+
+  return normalized;
+}
+
+function normalizeOptionalString(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+  return normalized || null;
+}
+
+function normalizeTargetType(value) {
+  const normalized = normalizeRequiredString(value, "targetType").toLowerCase();
+  if (!SOCKET_TARGET_TYPES.has(normalized)) {
+    throw createError(422, "targetType is invalid.");
+  }
+
+  return normalized;
+}
+
+async function assertTargetAccess(authUser, targetType, targetId) {
+  if (targetType === "channel") {
+    const channel = await channelModel.findById(targetId);
+    if (!channel) {
+      throw createError(404, "Resource not found.");
+    }
+
+    if (channel.type === "private") {
+      const membership = await channelModel.findMembership(targetId, authUser.id);
+      if (!membership) {
+        throw createError(403, "You do not have permission to perform this action.");
+      }
+    }
+
+    return {
+      kind: "channel",
+      channel,
+    };
+  }
+
+  const participant = await messagingModel.findConversationParticipant(targetId, authUser.id);
+  if (!participant) {
+    throw createError(403, "You do not have permission to perform this action.");
+  }
+
+  const conversation = await messagingModel.findConversationById(targetId);
+  if (!conversation) {
+    throw createError(404, "Resource not found.");
+  }
+
+  return {
+    kind: "conversation",
+    conversation,
+  };
+}
+
+async function resolveTargetAudience(targetType, targetId, fallbackOrgId = null) {
+  if (targetType === "channel") {
+    return messagingModel.listChannelMemberUserIds(targetId);
+  }
+
+  const participants = await messagingModel.listConversationParticipants([targetId]);
+  const participantIds = participants.map((item) => item.user_id);
+  if (participantIds.length) {
+    return [...new Set(participantIds)];
+  }
+
+  if (!fallbackOrgId) {
+    return [];
+  }
+
+  return realtimeModel.listOrgUserIds(fallbackOrgId);
+}
+
+async function recordSocketAudit(socket, action, metadata = {}) {
+  try {
+    await auditService.recordAudit({
+      userId: socket.auth?.user?.id,
+      method: "WS",
+      endpoint: "/ws",
+      statusCode: 200,
+      action,
+      metadata: {
+        sessionId: socket.auth?.session?.id || null,
+        ...metadata,
+      },
+    });
+  } catch (error) {
+    // Ignore audit failures for websocket flows.
+  }
+}
 
 function getTokenFromRequest(request) {
   try {
@@ -44,6 +168,269 @@ function sendEvent(socket, event, data) {
   }
 
   socket.send(JSON.stringify({ event, data }));
+}
+
+function sendSocketError(socket, error, requestedEvent = null) {
+  let status = Number.isInteger(error?.status) ? error.status : 500;
+  let message = error?.message || "An unexpected error occurred. Please try again.";
+
+  if (error?.code === "23505") {
+    status = 422;
+    message = "Validation error.";
+  } else if (error?.code === "23503") {
+    status = 422;
+    message = "Validation error.";
+  }
+
+  sendEvent(socket, "error", {
+    status,
+    message,
+    ...(requestedEvent ? { event: requestedEvent } : {}),
+  });
+}
+
+async function handleSendMessage(socket, payload) {
+  const data = payload || {};
+  const targetType = normalizeTargetType(data.targetType);
+  const targetId = normalizeRequiredString(data.targetId, "targetId");
+  const body = normalizeRequiredString(data.body, "body");
+
+  const messagePayload = {
+    message: {
+      body,
+      format: normalizeOptionalString(data.format) || "plaintext",
+      clientMsgId: normalizeOptionalString(data.clientMsgId),
+      replyTo: normalizeOptionalString(data.replyTo),
+      attachments: Array.isArray(data.attachments) ? data.attachments : [],
+      mentions: Array.isArray(data.mentions) ? data.mentions : [],
+    },
+  };
+
+  const messagingService = getMessagingService();
+
+  const response = targetType === "channel"
+    ? await messagingService.sendChannelMessage(socket.auth.user, targetId, messagePayload)
+    : await messagingService.sendConversationMessage(socket.auth.user, targetId, messagePayload);
+
+  await recordSocketAudit(socket, "ws.message.send", {
+    targetType,
+    targetId,
+    messageId: response?.message?.id || null,
+  });
+}
+
+async function handleTypingEvent(socket, payload, isTyping) {
+  const targetType = normalizeTargetType(payload?.targetType);
+  const targetId = normalizeRequiredString(payload?.targetId, "targetId");
+  await assertTargetAccess(socket.auth.user, targetType, targetId);
+
+  await realtimeModel.upsertTypingState({
+    userId: socket.auth.user.id,
+    targetType,
+    targetId,
+    isTyping,
+  });
+
+  const audience = await resolveTargetAudience(targetType, targetId, socket.auth.user.org_id);
+  const filteredAudience = audience.filter((userId) => userId !== socket.auth.user.id);
+
+  broadcastToUsers(filteredAudience, "typing:update", {
+    targetType,
+    targetId,
+    userId: socket.auth.user.id,
+    username: socket.auth.user.username,
+    isTyping,
+  });
+
+  await recordSocketAudit(socket, isTyping ? "ws.typing.start" : "ws.typing.stop", {
+    targetType,
+    targetId,
+  });
+}
+
+async function handleMarkRead(socket, payload) {
+  const targetType = normalizeTargetType(payload?.targetType);
+  const targetId = normalizeRequiredString(payload?.targetId, "targetId");
+  const lastReadMessageId = normalizeRequiredString(payload?.lastReadMessageId, "lastReadMessageId");
+  const message = await messagingModel.findMessageById(lastReadMessageId);
+
+  if (!message) {
+    throw createError(404, "Resource not found.");
+  }
+
+  if (targetType === "channel") {
+    if (message.channel_id !== targetId) {
+      throw createError(422, "lastReadMessageId must belong to the same target.");
+    }
+  } else if (message.conversation_id !== targetId) {
+    throw createError(422, "lastReadMessageId must belong to the same target.");
+  }
+
+  await assertTargetAccess(socket.auth.user, targetType, targetId);
+  await realtimeModel.upsertReadMarker({
+    userId: socket.auth.user.id,
+    targetType,
+    targetId,
+    lastReadMessageId,
+  });
+
+  await recordSocketAudit(socket, "ws.read.mark", {
+    targetType,
+    targetId,
+    lastReadMessageId,
+  });
+}
+
+async function handlePresenceSet(socket, payload) {
+  const status = normalizeRequiredString(payload?.status, "status").toLowerCase();
+  if (!PRESENCE_STATUSES.has(status)) {
+    throw createError(422, "status is invalid.");
+  }
+
+  const customText = normalizeOptionalString(payload?.customText);
+  const updatedPresence = await realtimeModel.upsertUserPresence({
+    userId: socket.auth.user.id,
+    status,
+    customText,
+    lastSeenAt: new Date().toISOString(),
+  });
+
+  const audience = await realtimeModel.listOrgUserIds(socket.auth.user.org_id);
+  broadcastToUsers(audience, "presence:update", {
+    userId: socket.auth.user.id,
+    status: updatedPresence.status,
+    customText: updatedPresence.custom_text || "",
+    lastSeen: updatedPresence.last_seen_at,
+  });
+
+  await recordSocketAudit(socket, "ws.presence.set", {
+    status,
+  });
+}
+
+async function handleVoiceJoin(socket, payload) {
+  const channelId = normalizeRequiredString(payload?.channelId, "channelId");
+  await assertTargetAccess(socket.auth.user, "channel", channelId);
+
+  await realtimeModel.upsertVoiceParticipation({
+    id: generateId("voice"),
+    channelId,
+    userId: socket.auth.user.id,
+  });
+
+  await recordSocketAudit(socket, "ws.voice.join", {
+    channelId,
+  });
+}
+
+async function handleVoiceLeave(socket, payload) {
+  const channelId = normalizeRequiredString(payload?.channelId, "channelId");
+  await assertTargetAccess(socket.auth.user, "channel", channelId);
+
+  await realtimeModel.leaveVoiceParticipation({
+    channelId,
+    userId: socket.auth.user.id,
+  });
+
+  await recordSocketAudit(socket, "ws.voice.leave", {
+    channelId,
+  });
+}
+
+async function handleRtcSignal(socket, payload) {
+  const callId = normalizeRequiredString(payload?.callId, "callId");
+  const targetUserId = normalizeRequiredString(payload?.targetUserId, "targetUserId");
+  const signalType = normalizeRequiredString(payload?.signalType, "signalType").toLowerCase();
+
+  if (!RTC_SIGNAL_TYPES.has(signalType)) {
+    throw createError(422, "signalType is invalid.");
+  }
+
+  const signalPayload = payload?.payload && typeof payload.payload === "object" && !Array.isArray(payload.payload)
+    ? payload.payload
+    : null;
+  if (!signalPayload) {
+    throw createError(422, "payload is invalid.");
+  }
+
+  await realtimeModel.createRtcSignal({
+    id: generateId("rtcsig"),
+    callId,
+    fromUserId: socket.auth.user.id,
+    targetUserId,
+    signalType,
+    signalPayload,
+  });
+
+  broadcastToUsers([targetUserId], "rtc:signal", {
+    callId,
+    fromUserId: socket.auth.user.id,
+    targetUserId,
+    signalType,
+    payload: signalPayload,
+  });
+
+  await recordSocketAudit(socket, "ws.rtc.signal", {
+    callId,
+    targetUserId,
+    signalType,
+  });
+}
+
+async function handleSocketEvent(socket, payload) {
+  const event = payload?.event;
+  if (!event || typeof event !== "string") {
+    throw createError(422, "event is required.");
+  }
+
+  const data = payload?.data || {};
+
+  if (event === "ping") {
+    sendEvent(socket, "pong", { now: new Date().toISOString() });
+    return;
+  }
+
+  if (event === "message:send") {
+    await handleSendMessage(socket, data);
+    return;
+  }
+
+  if (event === "typing:start") {
+    await handleTypingEvent(socket, data, true);
+    return;
+  }
+
+  if (event === "typing:stop") {
+    await handleTypingEvent(socket, data, false);
+    return;
+  }
+
+  if (event === "read:mark") {
+    await handleMarkRead(socket, data);
+    return;
+  }
+
+  if (event === "presence:set") {
+    await handlePresenceSet(socket, data);
+    return;
+  }
+
+  if (event === "voice:join") {
+    await handleVoiceJoin(socket, data);
+    return;
+  }
+
+  if (event === "voice:leave") {
+    await handleVoiceLeave(socket, data);
+    return;
+  }
+
+  if (event === "rtc:signal") {
+    await handleRtcSignal(socket, data);
+    return;
+  }
+
+  throw createError(422, "Unsupported WebSocket event.");
 }
 
 async function authenticateSocket(request) {
@@ -84,26 +471,77 @@ async function handleConnection(socket, request) {
   socket.auth = auth;
   addSocket(auth.user.id, socket);
 
-  sendEvent(socket, "connection:ready", {
+  await Promise.all([
+    sessionModel.touchSessionActivity(auth.session.id),
+    userModel.touchUserLastSeen(auth.user.id),
+    realtimeModel.upsertUserPresence({
+      userId: auth.user.id,
+      status: "online",
+      customText: null,
+      lastSeenAt: new Date().toISOString(),
+    }),
+  ]);
+
+  const presenceAudience = await realtimeModel.listOrgUserIds(auth.user.org_id);
+  broadcastToUsers(presenceAudience, "presence:update", {
     userId: auth.user.id,
-    connectedAt: new Date().toISOString(),
+    status: "online",
+    customText: "",
+    lastSeen: new Date().toISOString(),
   });
 
-  socket.on("message", (rawBuffer) => {
+  sendEvent(socket, "connected", {
+    userId: auth.user.id,
+    sessionId: auth.session.id,
+    serverTime: new Date().toISOString(),
+  });
+
+  socket.on("message", async (rawBuffer) => {
     try {
       const payload = JSON.parse(String(rawBuffer || ""));
-      if (payload?.event === "ping") {
-        sendEvent(socket, "pong", { now: new Date().toISOString() });
-      }
+      await handleSocketEvent(socket, payload);
     } catch (error) {
-      sendEvent(socket, "error", {
-        message: "Invalid WebSocket payload.",
-      });
+      if (error instanceof SyntaxError) {
+        sendSocketError(socket, createError(422, "Invalid WebSocket payload."));
+        return;
+      }
+
+      sendSocketError(socket, error, (() => {
+        try {
+          const payload = JSON.parse(String(rawBuffer || ""));
+          return typeof payload?.event === "string" ? payload.event : null;
+        } catch (parseError) {
+          return null;
+        }
+      })());
     }
   });
 
   socket.on("close", () => {
     removeSocket(auth.user.id, socket);
+
+    const hasActiveSockets = socketsByUserId.has(auth.user.id);
+    if (!hasActiveSockets) {
+      Promise.all([
+        realtimeModel.upsertUserPresence({
+          userId: auth.user.id,
+          status: "offline",
+          customText: null,
+          lastSeenAt: new Date().toISOString(),
+        }),
+        userModel.touchUserLastSeen(auth.user.id),
+      ]).then(async ([presence]) => {
+        const audience = await realtimeModel.listOrgUserIds(auth.user.org_id);
+        broadcastToUsers(audience, "presence:update", {
+          userId: auth.user.id,
+          status: presence.status,
+          customText: "",
+          lastSeen: presence.last_seen_at,
+        });
+      }).catch(() => {
+        // Ignore presence update failures during socket close.
+      });
+    }
   });
 }
 

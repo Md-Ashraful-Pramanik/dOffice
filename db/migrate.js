@@ -1115,6 +1115,11 @@ async function runMigrations() {
 
     await client.query(`
       ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS client_msg_id VARCHAR(128);
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
       ADD COLUMN IF NOT EXISTS poll_id VARCHAR(64);
     `);
 
@@ -1238,6 +1243,13 @@ async function runMigrations() {
       CREATE INDEX IF NOT EXISTS idx_doffice_messages_sender_id
       ON doffice_messages(sender_id)
       WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_doffice_messages_sender_client_msg_id
+      ON doffice_messages(sender_id, client_msg_id)
+      WHERE deleted_at IS NULL
+        AND client_msg_id IS NOT NULL;
     `);
 
     await client.query(`
@@ -1639,6 +1651,175 @@ async function runMigrations() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_user_presence (
+        user_id VARCHAR(64) PRIMARY KEY REFERENCES doffice_users(id) ON DELETE CASCADE,
+        status VARCHAR(16) NOT NULL DEFAULT 'offline',
+        custom_text TEXT,
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_user_presence_status_check'
+        ) THEN
+          ALTER TABLE doffice_user_presence
+          ADD CONSTRAINT doffice_user_presence_status_check
+          CHECK (status IN ('online', 'away', 'busy', 'offline'));
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_user_presence_status
+      ON doffice_user_presence(status)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_message_reads (
+        user_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        target_type VARCHAR(24) NOT NULL,
+        target_id VARCHAR(64) NOT NULL,
+        last_read_message_id VARCHAR(64) REFERENCES doffice_messages(id) ON DELETE SET NULL,
+        read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, target_type, target_id)
+      );
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_message_reads_target_type_check'
+        ) THEN
+          ALTER TABLE doffice_message_reads
+          ADD CONSTRAINT doffice_message_reads_target_type_check
+          CHECK (target_type IN ('channel', 'conversation'));
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_message_reads_target
+      ON doffice_message_reads(target_type, target_id, read_at DESC)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_typing_states (
+        user_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        target_type VARCHAR(24) NOT NULL,
+        target_id VARCHAR(64) NOT NULL,
+        is_typing BOOLEAN NOT NULL DEFAULT FALSE,
+        expires_at TIMESTAMPTZ,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, target_type, target_id)
+      );
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_typing_states_target_type_check'
+        ) THEN
+          ALTER TABLE doffice_typing_states
+          ADD CONSTRAINT doffice_typing_states_target_type_check
+          CHECK (target_type IN ('channel', 'conversation'));
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_typing_states_target
+      ON doffice_typing_states(target_type, target_id, updated_at DESC)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_voice_channel_participants (
+        id VARCHAR(64) PRIMARY KEY,
+        channel_id VARCHAR(64) NOT NULL REFERENCES doffice_channels(id) ON DELETE CASCADE,
+        user_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        left_at TIMESTAMPTZ,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_doffice_voice_channel_participants_active
+      ON doffice_voice_channel_participants(channel_id, user_id)
+      WHERE deleted_at IS NULL AND left_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_voice_channel_participants_user
+      ON doffice_voice_channel_participants(user_id, joined_at DESC)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS doffice_rtc_signals (
+        id VARCHAR(64) PRIMARY KEY,
+        call_id VARCHAR(64) NOT NULL,
+        from_user_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        target_user_id VARCHAR(64) NOT NULL REFERENCES doffice_users(id) ON DELETE CASCADE,
+        signal_type VARCHAR(24) NOT NULL,
+        payload JSONB NOT NULL,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conname = 'doffice_rtc_signals_signal_type_check'
+        ) THEN
+          ALTER TABLE doffice_rtc_signals
+          ADD CONSTRAINT doffice_rtc_signals_signal_type_check
+          CHECK (signal_type IN ('offer', 'answer', 'ice-candidate'));
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_rtc_signals_call
+      ON doffice_rtc_signals(call_id, created_at DESC)
+      WHERE deleted_at IS NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_rtc_signals_target
+      ON doffice_rtc_signals(target_user_id, created_at DESC)
+      WHERE deleted_at IS NULL;
     `);
 
     await client.query("COMMIT");

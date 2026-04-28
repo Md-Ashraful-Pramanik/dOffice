@@ -18,6 +18,7 @@ const MESSAGE_BASE_SELECT = `
     m.attachments,
     m.mentions,
     m.encryption,
+    m.client_msg_id,
     m.poll_id,
     m.is_pinned,
     m.pinned_at,
@@ -435,6 +436,7 @@ async function createMessage(payload, client = db) {
     attachments,
     mentions,
     encryption,
+    clientMsgId,
     pollId,
   } = payload;
 
@@ -453,6 +455,7 @@ async function createMessage(payload, client = db) {
       attachments,
       mentions,
       encryption,
+      client_msg_id,
       poll_id
     ) VALUES (
       $1::varchar(64),
@@ -468,7 +471,8 @@ async function createMessage(payload, client = db) {
       COALESCE($11::jsonb, '[]'::jsonb),
       COALESCE($12::text[], ARRAY[]::text[]),
       $13::jsonb,
-      $14::varchar(64)
+      $14::varchar(128),
+      $15::varchar(64)
     )
     RETURNING id`,
     [
@@ -485,6 +489,7 @@ async function createMessage(payload, client = db) {
       JSON.stringify(Array.isArray(attachments) ? attachments : []),
       Array.isArray(mentions) ? mentions : [],
       encryption ? JSON.stringify(encryption) : null,
+      clientMsgId || null,
       pollId || null,
     ]
   );
