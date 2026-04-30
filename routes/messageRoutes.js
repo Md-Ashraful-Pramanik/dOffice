@@ -120,10 +120,36 @@ router.post(
   messageController.addReaction
 );
 
+router.post(
+  "/channels/:channelId/messages/:messageId/reactions",
+  requireAuth,
+  validateReactionPayload,
+  messageController.addChannelReaction
+);
+
+router.post(
+  "/channels/:channel_id/messages/:msg_id/reactions",
+  requireAuth,
+  validateReactionPayload,
+  messageController.addChannelReaction
+);
+
 router.delete(
   "/messages/:messageId/reactions/:emoji",
   requireAuth,
   messageController.removeReaction
+);
+
+router.delete(
+  "/channels/:channelId/messages/:messageId/reactions/:emoji",
+  requireAuth,
+  messageController.removeChannelReaction
+);
+
+router.delete(
+  "/channels/:channel_id/messages/:msg_id/reactions/:emoji",
+  requireAuth,
+  messageController.removeChannelReaction
 );
 
 router.get(

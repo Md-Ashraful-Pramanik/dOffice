@@ -1,5 +1,39 @@
 const db = require("../config/db");
 
+async function findUserPresence(userId, client = db) {
+  if (!userId) {
+    return null;
+  }
+
+  const result = await client.query(
+    `SELECT user_id, status, custom_text, last_seen_at, updated_at
+     FROM doffice_user_presence
+     WHERE user_id = $1::varchar(64)
+       AND deleted_at IS NULL
+     LIMIT 1`,
+    [userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function listUserPresences(userIds = [], client = db) {
+  const ids = Array.isArray(userIds) ? [...new Set(userIds.filter(Boolean))] : [];
+  if (!ids.length) {
+    return [];
+  }
+
+  const result = await client.query(
+    `SELECT user_id, status, custom_text, last_seen_at, updated_at
+     FROM doffice_user_presence
+     WHERE user_id = ANY($1::varchar(64)[])
+       AND deleted_at IS NULL`,
+    [ids]
+  );
+
+  return result.rows;
+}
+
 async function upsertUserPresence(payload, client = db) {
   const { userId, status, customText, lastSeenAt } = payload;
 
@@ -172,6 +206,8 @@ async function listOrgUserIds(orgId, client = db) {
 }
 
 module.exports = {
+  findUserPresence,
+  listUserPresences,
   upsertUserPresence,
   upsertTypingState,
   upsertReadMarker,

@@ -1469,6 +1469,15 @@ async function addReaction(authUser, messageId, payload) {
   }
 }
 
+async function addChannelReaction(authUser, channelId, messageId, payload) {
+  const normalizedChannelId = normalizeRequiredString(channelId, "channelId");
+  const normalizedMessageId = normalizeRequiredString(messageId, "messageId");
+  const message = await messagingModel.findChannelMessageById(normalizedChannelId, normalizedMessageId);
+  assert(message, "Resource not found.", 404);
+
+  return addReaction(authUser, normalizedMessageId, payload);
+}
+
 async function removeReaction(authUser, messageId, emoji) {
   const normalizedEmoji = normalizeRequiredString(emoji, "emoji");
   assert(EMOJI_PATTERN.test(normalizedEmoji), "emoji is invalid.", 422);
@@ -1496,6 +1505,15 @@ async function removeReaction(authUser, messageId, emoji) {
   } finally {
     client.release();
   }
+}
+
+async function removeChannelReaction(authUser, channelId, messageId, emoji) {
+  const normalizedChannelId = normalizeRequiredString(channelId, "channelId");
+  const normalizedMessageId = normalizeRequiredString(messageId, "messageId");
+  const message = await messagingModel.findChannelMessageById(normalizedChannelId, normalizedMessageId);
+  assert(message, "Resource not found.", 404);
+
+  await removeReaction(authUser, normalizedMessageId, emoji);
 }
 
 async function listPinnedMessages(authUser, channelId) {
@@ -1874,7 +1892,9 @@ module.exports = {
   listThreadMessages,
   replyInThread,
   addReaction,
+  addChannelReaction,
   removeReaction,
+  removeChannelReaction,
   listPinnedMessages,
   pinMessage,
   unpinMessage,

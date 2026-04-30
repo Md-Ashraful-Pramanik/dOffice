@@ -148,11 +148,44 @@ async function addReaction(req, res, next) {
   }
 }
 
+async function addChannelReaction(req, res, next) {
+  try {
+    const channelId = req.params.channelId || req.params.channel_id;
+    const messageId = req.params.messageId || req.params.msgId || req.params.msg_id;
+    const response = await messagingService.addChannelReaction(req.auth.user, channelId, messageId, req.body);
+    setAudit(res, "message.reaction.add", {
+      messageId,
+      channelId,
+      emoji: req.body?.emoji,
+      reactionCount: Array.isArray(response.reactions) ? response.reactions.length : 0,
+    });
+    res.status(200).json(response);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function removeReaction(req, res, next) {
   try {
     await messagingService.removeReaction(req.auth.user, req.params.messageId, req.params.emoji);
     setAudit(res, "message.reaction.remove", {
       messageId: req.params.messageId,
+      emoji: req.params.emoji,
+    });
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function removeChannelReaction(req, res, next) {
+  try {
+    const channelId = req.params.channelId || req.params.channel_id;
+    const messageId = req.params.messageId || req.params.msgId || req.params.msg_id;
+    await messagingService.removeChannelReaction(req.auth.user, channelId, messageId, req.params.emoji);
+    setAudit(res, "message.reaction.remove", {
+      messageId,
+      channelId,
       emoji: req.params.emoji,
     });
     res.status(204).send();
@@ -249,7 +282,9 @@ module.exports = {
   listThreadMessages,
   replyInThread,
   addReaction,
+  addChannelReaction,
   removeReaction,
+  removeChannelReaction,
   listPinnedMessages,
   pinMessage,
   unpinMessage,

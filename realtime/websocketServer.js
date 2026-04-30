@@ -195,6 +195,35 @@ function sendSocketError(socket, error, requestedEvent = null) {
   });
 }
 
+function toPresenceEventData(userId, presenceRow) {
+  return {
+    userId,
+    status: presenceRow?.status || "offline",
+    customText: presenceRow?.custom_text || "",
+    lastSeen: presenceRow?.last_seen_at || new Date().toISOString(),
+  };
+}
+
+async function resolveConnectedPresence(userId) {
+  const existingPresence = await realtimeModel.findUserPresence(userId);
+  return realtimeModel.upsertUserPresence({
+    userId,
+    status: existingPresence?.status || "online",
+    customText: existingPresence?.custom_text || null,
+    lastSeenAt: new Date().toISOString(),
+  });
+}
+
+async function resolveDisconnectedPresence(userId) {
+  const existingPresence = await realtimeModel.findUserPresence(userId);
+  return realtimeModel.upsertUserPresence({
+    userId,
+    status: "offline",
+    customText: existingPresence?.custom_text || null,
+    lastSeenAt: new Date().toISOString(),
+  });
+}
+
 async function handleSendMessage(socket, payload) {
   if (!isPlainObject(payload)) {
     throw createError(422, "data is invalid.");
@@ -316,14 +345,10 @@ async function handlePresenceSet(socket, payload) {
     customText,
     lastSeenAt: new Date().toISOString(),
   });
+  socket.auth.presence = updatedPresence;
 
   const audience = await realtimeModel.listOrgUserIds(socket.auth.user.org_id);
-  broadcastToUsers(audience, "presence:update", {
-    userId: socket.auth.user.id,
-    status: updatedPresence.status,
-    customText: updatedPresence.custom_text || "",
-    lastSeen: updatedPresence.last_seen_at,
-  });
+  broadcastToUsers(audience, "presence:update", toPresenceEventData(socket.auth.user.id, updatedPresence));
 
   await recordSocketAudit(socket, "ws.presence.set", {
     status,
@@ -508,24 +533,15 @@ async function handleConnection(socket, request) {
   socket.auth = auth;
   addSocket(auth.user.id, socket);
 
-  await Promise.all([
+  const [, , presence] = await Promise.all([
     sessionModel.touchSessionActivity(auth.session.id),
     userModel.touchUserLastSeen(auth.user.id),
-    realtimeModel.upsertUserPresence({
-      userId: auth.user.id,
-      status: "online",
-      customText: null,
-      lastSeenAt: new Date().toISOString(),
-    }),
+    resolveConnectedPresence(auth.user.id),
   ]);
+  socket.auth.presence = presence;
 
   const presenceAudience = await realtimeModel.listOrgUserIds(auth.user.org_id);
-  broadcastToUsers(presenceAudience, "presence:update", {
-    userId: auth.user.id,
-    status: "online",
-    customText: "",
-    lastSeen: new Date().toISOString(),
-  });
+  broadcastToUsers(presenceAudience, "presence:update", toPresenceEventData(auth.user.id, presence));
 
   sendEvent(socket, "connected", {
     userId: auth.user.id,
@@ -560,21 +576,11 @@ async function handleConnection(socket, request) {
     const hasActiveSockets = socketsByUserId.has(auth.user.id);
     if (!hasActiveSockets) {
       Promise.all([
-        realtimeModel.upsertUserPresence({
-          userId: auth.user.id,
-          status: "offline",
-          customText: null,
-          lastSeenAt: new Date().toISOString(),
-        }),
+        resolveDisconnectedPresence(auth.user.id),
         userModel.touchUserLastSeen(auth.user.id),
       ]).then(async ([presence]) => {
         const audience = await realtimeModel.listOrgUserIds(auth.user.org_id);
-        broadcastToUsers(audience, "presence:update", {
-          userId: auth.user.id,
-          status: presence.status,
-          customText: "",
-          lastSeen: presence.last_seen_at,
-        });
+        broadcastToUsers(audience, "presence:update", toPresenceEventData(auth.user.id, presence));
       }).catch(() => {
         // Ignore presence update failures during socket close.
       });

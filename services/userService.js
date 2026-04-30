@@ -4,6 +4,7 @@ const db = require("../config/db");
 const userModel = require("../models/userModel");
 const sessionModel = require("../models/sessionModel");
 const organizationModel = require("../models/organizationModel");
+const realtimeModel = require("../models/realtimeModel");
 const { generateId } = require("../utils/id");
 
 const USER_STATUSES = new Set(["active", "suspended", "on-leave", "deactivated", "retired"]);
@@ -118,10 +119,12 @@ function toUserResponse(user, roleIds = []) {
   };
 }
 
-function toUserProfileResponse(user) {
-  const now = Date.now();
-  const lastSeen = user.last_seen_at ? new Date(user.last_seen_at).getTime() : 0;
-  const presence = now - lastSeen <= 5 * 60 * 1000 ? "online" : "offline";
+function resolvePresenceStatus(presence) {
+  return presence?.status || "offline";
+}
+
+function toUserProfileResponse(user, presence) {
+  const resolvedPresence = resolvePresenceStatus(presence);
 
   return {
     profile: {
@@ -133,7 +136,7 @@ function toUserProfileResponse(user) {
       bio: user.bio,
       avatar: user.avatar,
       status: user.status,
-      presence,
+      presence: resolvedPresence,
       orgId: user.org_id,
     },
   };
@@ -156,13 +159,11 @@ function toMultipleUsersResponse(result, limit, offset) {
   };
 }
 
-function toDirectoryResponse(result, limit, offset) {
-  const now = Date.now();
+function toDirectoryResponse(result, limit, offset, presenceMap = new Map()) {
 
   return {
     directory: result.directory.map((row) => {
-      const lastSeen = row.last_seen_at ? new Date(row.last_seen_at).getTime() : 0;
-      const presence = now - lastSeen <= 5 * 60 * 1000 ? "online" : "offline";
+      const presence = resolvePresenceStatus(presenceMap.get(row.id));
 
       return {
         id: row.id,
@@ -298,7 +299,8 @@ async function getUserProfile(authUser, userId) {
   assert(user, "Resource not found.", 404);
   assertOrgAccess(user.org_id, accessContext);
 
-  return toUserProfileResponse(user);
+  const presence = await realtimeModel.findUserPresence(user.id);
+  return toUserProfileResponse(user, presence);
 }
 
 async function createUserInOrganization(authUser, orgId, payload) {
@@ -517,7 +519,10 @@ async function getOrganizationDirectory(authUser, orgId, query) {
     offset,
   });
 
-  return toDirectoryResponse(result, limit, offset);
+  const presences = await realtimeModel.listUserPresences(result.directory.map((row) => row.id));
+  const presenceMap = new Map(presences.map((presence) => [presence.user_id, presence]));
+
+  return toDirectoryResponse(result, limit, offset, presenceMap);
 }
 
 async function getOrganizationOrgChart(authUser, orgId) {
