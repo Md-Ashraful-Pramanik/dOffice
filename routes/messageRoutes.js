@@ -54,10 +54,36 @@ router.put(
   messageController.updateMessage
 );
 
+router.put(
+  "/channels/:channelId/messages/:messageId",
+  requireAuth,
+  validateUpdateMessagePayload,
+  messageController.updateChannelMessage
+);
+
+router.put(
+  "/channels/:channel_id/messages/:msg_id",
+  requireAuth,
+  validateUpdateMessagePayload,
+  messageController.updateChannelMessage
+);
+
 router.delete(
   "/messages/:messageId",
   requireAuth,
   messageController.deleteMessage
+);
+
+router.delete(
+  "/channels/:channelId/messages/:messageId",
+  requireAuth,
+  messageController.deleteChannelMessage
+);
+
+router.delete(
+  "/channels/:channel_id/messages/:msg_id",
+  requireAuth,
+  messageController.deleteChannelMessage
 );
 
 router.post(

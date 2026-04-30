@@ -12,6 +12,7 @@ const {
 const { broadcastToUsers } = require("../realtime/websocketServer");
 
 const CONVERSATION_TYPES = new Set(["dm", "group"]);
+const TARGET_TYPES = new Set(["channel", "conversation"]);
 const MESSAGE_FORMATS = new Set(["plaintext", "markdown", "encrypted"]);
 const MESSAGE_TYPES = new Set(["regular", "poll"]);
 const EMOJI_PATTERN = /^[^\s]{1,64}$/u;
@@ -1087,6 +1088,9 @@ async function listConversationMessages(authUser, conversationId, query) {
 }
 
 async function createMessageForTarget(authUser, target, payload, extra = {}) {
+  assert(TARGET_TYPES.has(target?.targetType), "targetType is invalid.", 422);
+  assert(target?.kind === target?.targetType, "targetType is invalid.", 422);
+
   const messagePayload = isPlainObject(payload?.message) ? payload.message : null;
   assert(messagePayload, "message is required.", 422);
 
@@ -1304,6 +1308,15 @@ async function updateMessage(authUser, messageId, payload) {
   }
 }
 
+async function updateChannelMessage(authUser, channelId, messageId, payload) {
+  const normalizedChannelId = normalizeRequiredString(channelId, "channelId");
+  const message = await messagingModel.findMessageById(messageId);
+  assert(message, "Resource not found.", 404);
+  assert(message.target_type === "channel" && message.channel_id === normalizedChannelId, "Resource not found.", 404);
+
+  return updateMessage(authUser, messageId, payload);
+}
+
 async function deleteMessage(authUser, messageId) {
   const client = await db.pool.connect();
 
@@ -1354,6 +1367,15 @@ async function deleteMessage(authUser, messageId) {
   } finally {
     client.release();
   }
+}
+
+async function deleteChannelMessage(authUser, channelId, messageId) {
+  const normalizedChannelId = normalizeRequiredString(channelId, "channelId");
+  const message = await messagingModel.findMessageById(messageId);
+  assert(message, "Resource not found.", 404);
+  assert(message.target_type === "channel" && message.channel_id === normalizedChannelId, "Resource not found.", 404);
+
+  await deleteMessage(authUser, messageId);
 }
 
 async function getMessageEditHistory(authUser, messageId) {
@@ -1434,7 +1456,8 @@ async function addReaction(authUser, messageId, payload) {
     const reactions = createReactionMap(summaryRows).get(messageId) || [];
     broadcastToUsers(audience, "reaction:added", {
       messageId,
-      reactions,
+      emoji,
+      userId: authUser.id,
     });
 
     return { reactions };
@@ -1844,7 +1867,9 @@ module.exports = {
   sendConversationMessage,
   getMessage,
   updateMessage,
+  updateChannelMessage,
   deleteMessage,
+  deleteChannelMessage,
   getMessageEditHistory,
   listThreadMessages,
   replyInThread,

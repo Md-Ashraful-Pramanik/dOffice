@@ -58,11 +58,42 @@ async function updateMessage(req, res, next) {
   }
 }
 
+async function updateChannelMessage(req, res, next) {
+  try {
+    const channelId = req.params.channelId || req.params.channel_id;
+    const messageId = req.params.messageId || req.params.msgId || req.params.msg_id;
+    const response = await messagingService.updateChannelMessage(req.auth.user, channelId, messageId, req.body);
+    setAudit(res, "message.update", {
+      messageId,
+      targetType: response.message.targetType,
+      targetId: response.message.targetId,
+    });
+    res.status(200).json(response);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function deleteMessage(req, res, next) {
   try {
     await messagingService.deleteMessage(req.auth.user, req.params.messageId);
     setAudit(res, "message.delete", {
       messageId: req.params.messageId,
+    });
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function deleteChannelMessage(req, res, next) {
+  try {
+    const channelId = req.params.channelId || req.params.channel_id;
+    const messageId = req.params.messageId || req.params.msgId || req.params.msg_id;
+    await messagingService.deleteChannelMessage(req.auth.user, channelId, messageId);
+    setAudit(res, "message.delete", {
+      messageId,
+      channelId,
     });
     res.status(204).send();
   } catch (error) {
@@ -211,7 +242,9 @@ module.exports = {
   sendChannelMessage,
   getMessage,
   updateMessage,
+  updateChannelMessage,
   deleteMessage,
+  deleteChannelMessage,
   getMessageEditHistory,
   listThreadMessages,
   replyInThread,
