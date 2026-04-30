@@ -1061,6 +1061,7 @@ async function runMigrations() {
         pinned_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
         edited BOOLEAN NOT NULL DEFAULT FALSE,
         edited_at TIMESTAMPTZ,
+        expires_at TIMESTAMPTZ,
         deleted_by VARCHAR(64) REFERENCES doffice_users(id) ON DELETE SET NULL,
         deleted_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1146,6 +1147,11 @@ async function runMigrations() {
     await client.query(`
       ALTER TABLE doffice_messages
       ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      ALTER TABLE doffice_messages
+      ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
     `);
 
     await client.query(`
@@ -1383,6 +1389,12 @@ async function runMigrations() {
        VALUES ($1, $2, $3, 'system', TRUE)
        ON CONFLICT (id) DO UPDATE
          SET name = EXCLUDED.name,
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_messages_expires_at
+      ON doffice_messages(expires_at)
+      WHERE deleted_at IS NULL AND expires_at IS NOT NULL;
+    `);
              description = EXCLUDED.description,
              type = 'system',
              is_system = TRUE,

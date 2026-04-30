@@ -1098,6 +1098,12 @@ async function createMessageForTarget(authUser, target, payload, extra = {}) {
   const encryption = normalizeEncryption(messagePayload.encryption, format);
   const replyToMessageId = normalizeOptionalString(messagePayload.replyTo);
   let threadParentId = extra.threadParentId || null;
+  const disappearingTimerSeconds = target.kind === "conversation"
+    ? Number(target.context.conversation.disappearing_timer || 0)
+    : 0;
+  const expiresAt = disappearingTimerSeconds > 0
+    ? new Date(Date.now() + disappearingTimerSeconds * 1000).toISOString()
+    : null;
 
   if (target.kind === "channel") {
     assert(format !== "encrypted", "format is invalid.", 422);
@@ -1176,6 +1182,7 @@ async function createMessageForTarget(authUser, target, payload, extra = {}) {
         encryption,
         clientMsgId,
         pollId: extra.pollId || null,
+        expiresAt,
       },
       client
     );
@@ -1280,7 +1287,14 @@ async function updateMessage(authUser, messageId, payload) {
     await client.query("COMMIT");
 
     const response = await buildSingleMessageResponse(updated);
-    broadcastToUsers(audience, "message:edited", response.message);
+    broadcastToUsers(audience, "message:edited", {
+      id: response.message.id,
+      targetType: response.message.targetType,
+      targetId: response.message.targetId,
+      body: response.message.body,
+      editedAt: response.message.editedAt,
+      editedBy: authUser.id,
+    });
     return response;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -1329,9 +1343,10 @@ async function deleteMessage(authUser, messageId) {
     await client.query("COMMIT");
 
     broadcastToUsers(audience, "message:deleted", {
-      messageId,
+      id: messageId,
       targetType: message.target_type,
       targetId: message.target_type === "channel" ? message.channel_id : message.conversation_id,
+      deletedBy: authUser.id,
     });
   } catch (error) {
     await client.query("ROLLBACK");

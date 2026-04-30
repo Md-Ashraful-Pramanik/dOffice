@@ -11,11 +11,13 @@ const { generateId } = require("../utils/id");
 const { sha256 } = require("../utils/crypto");
 
 let websocketServer = null;
+let expirationSweepTimer = null;
 const socketsByUserId = new Map();
 
 const SOCKET_TARGET_TYPES = new Set(["channel", "conversation"]);
 const PRESENCE_STATUSES = new Set(["online", "away", "busy", "offline"]);
 const RTC_SIGNAL_TYPES = new Set(["offer", "answer", "ice-candidate"]);
+const MESSAGE_EXPIRATION_SWEEP_MS = Number(process.env.MESSAGE_EXPIRATION_SWEEP_MS || 15000);
 let messagingServiceRef = null;
 
 function getMessagingService() {
@@ -433,6 +435,21 @@ async function handleSocketEvent(socket, payload) {
   throw createError(422, "Unsupported WebSocket event.");
 }
 
+async function sweepExpiredMessagesAndBroadcast() {
+  const expired = await messagingModel.expireMessagesDue();
+  for (const message of expired) {
+    if (!message.conversation_id) {
+      continue;
+    }
+
+    const audience = await resolveTargetAudience("conversation", message.conversation_id);
+    broadcastToUsers(audience, "message:expired", {
+      id: message.id,
+      conversationId: message.conversation_id,
+    });
+  }
+}
+
 async function authenticateSocket(request) {
   const token = getTokenFromRequest(request);
   if (!token) {
@@ -559,6 +576,24 @@ function initializeWebSocketServer(server) {
     handleConnection(socket, request).catch(() => {
       socket.close(1011, "Unable to initialize connection");
     });
+  });
+
+  if (!expirationSweepTimer) {
+    expirationSweepTimer = setInterval(() => {
+      sweepExpiredMessagesAndBroadcast().catch(() => {
+        // Ignore background expiration sweep failures.
+      });
+    }, MESSAGE_EXPIRATION_SWEEP_MS);
+    if (typeof expirationSweepTimer.unref === "function") {
+      expirationSweepTimer.unref();
+    }
+  }
+
+  websocketServer.on("close", () => {
+    if (expirationSweepTimer) {
+      clearInterval(expirationSweepTimer);
+      expirationSweepTimer = null;
+    }
   });
 
   return websocketServer;

@@ -1,7 +1,9 @@
 const db = require("../config/db");
 const channelModel = require("../models/channelModel");
 const channelCategoryModel = require("../models/channelCategoryModel");
+const messagingModel = require("../models/messagingModel");
 const { generateId } = require("../utils/id");
+const { broadcastToUsers } = require("../realtime/websocketServer");
 const {
   assert,
   getAccessContext,
@@ -171,6 +173,18 @@ function isChannelAdmin(membership) {
 
 function canInviteToChannel(membership) {
   return Boolean(membership && (membership.role === "admin" || membership.role === "moderator"));
+}
+
+async function broadcastChannelEvent(channelId, event, data, options = {}) {
+  const { excludeUserIds = [] } = options;
+  const memberIds = await messagingModel.listChannelMemberUserIds(channelId);
+  const excluded = new Set((excludeUserIds || []).filter(Boolean));
+  const audience = memberIds.filter((memberId) => !excluded.has(memberId));
+  if (!audience.length) {
+    return;
+  }
+
+  broadcastToUsers(audience, event, data);
 }
 
 function assertChannelVisibility(channel, membership) {
@@ -415,6 +429,18 @@ async function updateChannel(authUser, channelId, payload) {
     const updated = await channelModel.findById(channelId, client);
 
     await client.query("COMMIT");
+    await broadcastChannelEvent(channelId, "channel:updated", {
+      channelId,
+      changes: {
+        ...(Object.prototype.hasOwnProperty.call(updates, "name") ? { name: updates.name } : {}),
+        ...(Object.prototype.hasOwnProperty.call(updates, "description") ? { description: updates.description } : {}),
+        ...(Object.prototype.hasOwnProperty.call(updates, "topic") ? { topic: updates.topic } : {}),
+        ...(Object.prototype.hasOwnProperty.call(updates, "categoryId") ? { categoryId: updates.categoryId } : {}),
+        ...(Object.prototype.hasOwnProperty.call(updates, "type") ? { type: updates.type } : {}),
+      },
+      updatedBy: authUser.id,
+    });
+
     return {
       channel: toChannel(updated),
     };
@@ -470,6 +496,14 @@ async function joinChannel(authUser, channelId) {
     const updated = await channelModel.findById(channelId, client);
     await client.query("COMMIT");
 
+    await broadcastChannelEvent(channelId, "channel:member_joined", {
+      channelId,
+      userId: authUser.id,
+      username: authUser.username,
+    }, {
+      excludeUserIds: [authUser.id],
+    });
+
     return {
       channel: toChannel(updated),
     };
@@ -494,6 +528,14 @@ async function leaveChannel(authUser, channelId) {
     await channelModel.softRemoveMember(channelId, authUser.id, client);
 
     await client.query("COMMIT");
+
+    await broadcastChannelEvent(channelId, "channel:member_left", {
+      channelId,
+      userId: authUser.id,
+      username: authUser.username,
+    }, {
+      excludeUserIds: [authUser.id],
+    });
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -537,6 +579,18 @@ async function inviteToChannel(authUser, channelId, payload) {
     const updated = await channelModel.findById(channelId, client);
     await client.query("COMMIT");
 
+    const invitedUsers = await messagingModel.findUsersByIds(userIds);
+    const usernameByUserId = new Map(invitedUsers.map((user) => [user.id, user.username]));
+    for (const userId of userIds) {
+      await broadcastChannelEvent(channelId, "channel:member_joined", {
+        channelId,
+        userId,
+        username: usernameByUserId.get(userId) || userId,
+      }, {
+        excludeUserIds: [userId],
+      });
+    }
+
     return {
       channel: toChannel(updated),
     };
@@ -560,10 +614,20 @@ async function removeMember(authUser, channelId, userId) {
     const targetMembership = await channelModel.findMembership(channelId, userId, client);
     assert(targetMembership, "Resource not found.", 404);
 
+    const removedUser = await assertUserExists(userId, client);
+
     await assertNotRemovingLastAdmin(channelId, userId, null, client);
     await channelModel.softRemoveMember(channelId, userId, client);
 
     await client.query("COMMIT");
+
+    await broadcastChannelEvent(channelId, "channel:member_left", {
+      channelId,
+      userId,
+      username: removedUser.username,
+    }, {
+      excludeUserIds: [userId],
+    });
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -639,6 +703,14 @@ async function setSlowMode(authUser, channelId, payload) {
     const updated = await channelModel.findById(channelId, client);
 
     await client.query("COMMIT");
+    await broadcastChannelEvent(channelId, "channel:updated", {
+      channelId,
+      changes: {
+        slowModeInterval: intervalSeconds,
+      },
+      updatedBy: authUser.id,
+    });
+
     return {
       channel: toChannel(updated),
     };

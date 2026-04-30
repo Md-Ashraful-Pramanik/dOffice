@@ -25,6 +25,7 @@ const MESSAGE_BASE_SELECT = `
     m.pinned_by,
     m.edited,
     m.edited_at,
+    m.expires_at,
     m.deleted_at,
     m.deleted_by,
     m.created_at,
@@ -438,6 +439,7 @@ async function createMessage(payload, client = db) {
     encryption,
     clientMsgId,
     pollId,
+    expiresAt,
   } = payload;
 
   const result = await client.query(
@@ -456,7 +458,8 @@ async function createMessage(payload, client = db) {
       mentions,
       encryption,
       client_msg_id,
-      poll_id
+      poll_id,
+      expires_at
     ) VALUES (
       $1::varchar(64),
       $2::text,
@@ -472,7 +475,8 @@ async function createMessage(payload, client = db) {
       COALESCE($12::text[], ARRAY[]::text[]),
       $13::jsonb,
       $14::varchar(128),
-      $15::varchar(64)
+      $15::varchar(64),
+      $16::timestamptz
     )
     RETURNING id`,
     [
@@ -491,6 +495,7 @@ async function createMessage(payload, client = db) {
       encryption ? JSON.stringify(encryption) : null,
       clientMsgId || null,
       pollId || null,
+      expiresAt || null,
     ]
   );
 
@@ -500,11 +505,13 @@ async function createMessage(payload, client = db) {
 async function findMessageById(messageId, client = db, options = {}) {
   const { includeDeleted = false } = options;
   const deletedClause = includeDeleted ? "" : "AND m.deleted_at IS NULL";
+  const expiresClause = includeDeleted ? "" : "AND (m.expires_at IS NULL OR m.expires_at > NOW())";
 
   const result = await client.query(
     `${MESSAGE_BASE_SELECT}
      WHERE m.id = $1::varchar(64)
        ${deletedClause}
+       ${expiresClause}
      LIMIT 1`,
     [messageId]
   );
@@ -527,7 +534,7 @@ async function listMessages(filters = {}, client = db) {
   } = filters;
 
   const params = [];
-  const where = ["m.deleted_at IS NULL"];
+  const where = ["m.deleted_at IS NULL", "(m.expires_at IS NULL OR m.expires_at > NOW())"];
 
   if (targetType === "channel") {
     params.push(targetId);
@@ -668,6 +675,21 @@ async function updateMessage(messageId, updates = {}, client = db) {
   );
 
   return result.rows[0] || null;
+}
+
+async function expireMessagesDue(client = db) {
+  const result = await client.query(
+    `UPDATE doffice_messages
+     SET deleted_at = NOW(),
+         deleted_by = NULL,
+         updated_at = NOW()
+     WHERE deleted_at IS NULL
+       AND expires_at IS NOT NULL
+       AND expires_at <= NOW()
+     RETURNING id, conversation_id`
+  );
+
+  return result.rows;
 }
 
 async function createMessageEdit(payload, client = db) {
@@ -1050,6 +1072,7 @@ module.exports = {
   listMessages,
   listMessagesByIds,
   updateMessage,
+  expireMessagesDue,
   createMessageEdit,
   listMessageEdits,
   addReaction,
