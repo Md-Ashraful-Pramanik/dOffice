@@ -908,7 +908,7 @@ async function addConversationParticipants(authUser, conversationId, payload) {
     const audience = await resolveTargetAudience("conversation", conversationId, client);
     await client.query("COMMIT");
 
-    broadcastToUsers(audience, "conversation:participants_added", {
+    await broadcastToUsers(audience, "conversation:participants_added", {
       conversationId,
       userIds,
     });
@@ -982,7 +982,7 @@ async function removeConversationParticipant(authUser, conversationId, userId) {
     const audience = await resolveTargetAudience("conversation", conversationId, client);
     await client.query("COMMIT");
 
-    broadcastToUsers([...audience, normalizedUserId], "conversation:participant_removed", {
+    await broadcastToUsers([...audience, normalizedUserId], "conversation:participant_removed", {
       conversationId,
       userId: normalizedUserId,
     });
@@ -1209,10 +1209,14 @@ async function createMessageForTarget(authUser, target, payload, extra = {}) {
     await client.query("COMMIT");
 
     const response = await buildSingleMessageResponse(created);
-    broadcastToUsers(audience, "message:new", response.message);
-    createdNotifications.forEach((notification) => {
-      broadcastToUsers([notification.user_id], "notification:new", toRealtimeNotification(notification));
-    });
+    await broadcastToUsers(audience, "message:new", response.message);
+    await Promise.all(
+      createdNotifications.map((notification) => broadcastToUsers(
+        [notification.user_id],
+        "notification:new",
+        toRealtimeNotification(notification)
+      ))
+    );
 
     return response;
   } catch (error) {
@@ -1291,7 +1295,7 @@ async function updateMessage(authUser, messageId, payload) {
     await client.query("COMMIT");
 
     const response = await buildSingleMessageResponse(updated);
-    broadcastToUsers(audience, "message:edited", {
+    await broadcastToUsers(audience, "message:edited", {
       id: response.message.id,
       targetType: response.message.targetType,
       targetId: response.message.targetId,
@@ -1355,7 +1359,7 @@ async function deleteMessage(authUser, messageId) {
     const audience = await resolveTargetAudience(message.target_type, message.target_type === "channel" ? message.channel_id : message.conversation_id, client);
     await client.query("COMMIT");
 
-    broadcastToUsers(audience, "message:deleted", {
+    await broadcastToUsers(audience, "message:deleted", {
       id: messageId,
       targetType: message.target_type,
       targetId: message.target_type === "channel" ? message.channel_id : message.conversation_id,
@@ -1454,7 +1458,7 @@ async function addReaction(authUser, messageId, payload) {
     await client.query("COMMIT");
 
     const reactions = createReactionMap(summaryRows).get(messageId) || [];
-    broadcastToUsers(audience, "reaction:added", {
+    await broadcastToUsers(audience, "reaction:added", {
       messageId,
       emoji,
       userId: authUser.id,
@@ -1494,7 +1498,7 @@ async function removeReaction(authUser, messageId, emoji) {
     const audience = await resolveTargetAudience(message.target_type, message.target_type === "channel" ? message.channel_id : message.conversation_id, client);
     await client.query("COMMIT");
 
-    broadcastToUsers(audience, "reaction:removed", {
+    await broadcastToUsers(audience, "reaction:removed", {
       messageId,
       emoji: normalizedEmoji,
       userId: authUser.id,
@@ -1561,7 +1565,7 @@ async function pinMessage(authUser, messageId) {
     await client.query("COMMIT");
 
     const response = await buildSingleMessageResponse(updated);
-    broadcastToUsers(audience, "message:pinned", response.message);
+    await broadcastToUsers(audience, "message:pinned", response.message);
     return response;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -1598,7 +1602,7 @@ async function unpinMessage(authUser, messageId) {
     const audience = await resolveTargetAudience("channel", message.channel_id, client);
     await client.query("COMMIT");
 
-    broadcastToUsers(audience, "message:unpinned", {
+    await broadcastToUsers(audience, "message:unpinned", {
       messageId,
       channelId: message.channel_id,
     });
@@ -1764,7 +1768,7 @@ async function createPoll(authUser, channelId, payload) {
     await client.query("COMMIT");
 
     const messageResponse = await buildSingleMessageResponse(message);
-    broadcastToUsers(audience, "message:new", messageResponse.message);
+    await broadcastToUsers(audience, "message:new", messageResponse.message);
 
     return toPollResponse(poll, []);
   } catch (error) {
@@ -1804,7 +1808,7 @@ async function voteOnPoll(authUser, pollId, payload) {
     await client.query("COMMIT");
 
     const response = toPollResponse(poll, votes);
-    broadcastToUsers(audience, "poll:updated", response.poll);
+    await broadcastToUsers(audience, "poll:updated", response.poll);
     return response;
   } catch (error) {
     await client.query("ROLLBACK");

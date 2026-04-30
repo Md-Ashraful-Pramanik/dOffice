@@ -184,7 +184,7 @@ async function broadcastChannelEvent(channelId, event, data, options = {}) {
     return;
   }
 
-  broadcastToUsers(audience, event, data);
+  await broadcastToUsers(audience, event, data);
 }
 
 function assertChannelVisibility(channel, membership) {

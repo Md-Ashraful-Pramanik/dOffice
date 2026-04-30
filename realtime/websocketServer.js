@@ -170,10 +170,14 @@ function removeSocket(userId, socket) {
 
 function sendEvent(socket, event, data) {
   if (!socket || socket.readyState !== 1) {
-    return;
+    return Promise.resolve(false);
   }
 
-  socket.send(JSON.stringify({ event, data }));
+  return new Promise((resolve) => {
+    socket.send(JSON.stringify({ event, data }), (error) => {
+      resolve(!error);
+    });
+  });
 }
 
 function sendSocketError(socket, error, requestedEvent = null) {
@@ -285,7 +289,7 @@ async function handleTypingEvent(socket, payload, isTyping) {
   const audience = await resolveTargetAudience(targetType, targetId, socket.auth.user.org_id);
   const filteredAudience = audience.filter((userId) => userId !== socket.auth.user.id);
 
-  broadcastToUsers(filteredAudience, "typing:update", {
+  await broadcastToUsers(filteredAudience, "typing:update", {
     targetType,
     targetId,
     userId: socket.auth.user.id,
@@ -348,7 +352,7 @@ async function handlePresenceSet(socket, payload) {
   socket.auth.presence = updatedPresence;
 
   const audience = await realtimeModel.listOrgUserIds(socket.auth.user.org_id);
-  broadcastToUsers(audience, "presence:update", toPresenceEventData(socket.auth.user.id, updatedPresence));
+  await broadcastToUsers(audience, "presence:update", toPresenceEventData(socket.auth.user.id, updatedPresence));
 
   await recordSocketAudit(socket, "ws.presence.set", {
     status,
@@ -409,7 +413,7 @@ async function handleRtcSignal(socket, payload) {
     signalPayload,
   });
 
-  broadcastToUsers([targetUserId], "rtc:signal", {
+  await broadcastToUsers([targetUserId], "rtc:signal", {
     callId,
     fromUserId: socket.auth.user.id,
     targetUserId,
@@ -488,7 +492,7 @@ async function sweepExpiredMessagesAndBroadcast() {
     }
 
     const audience = await resolveTargetAudience("conversation", message.conversation_id);
-    broadcastToUsers(audience, "message:expired", {
+    await broadcastToUsers(audience, "message:expired", {
       id: message.id,
       conversationId: message.conversation_id,
     });
@@ -541,7 +545,7 @@ async function handleConnection(socket, request) {
   socket.auth.presence = presence;
 
   const presenceAudience = await realtimeModel.listOrgUserIds(auth.user.org_id);
-  broadcastToUsers(presenceAudience, "presence:update", toPresenceEventData(auth.user.id, presence));
+  await broadcastToUsers(presenceAudience, "presence:update", toPresenceEventData(auth.user.id, presence));
 
   sendEvent(socket, "connected", {
     userId: auth.user.id,
@@ -580,7 +584,7 @@ async function handleConnection(socket, request) {
         userModel.touchUserLastSeen(auth.user.id),
       ]).then(async ([presence]) => {
         const audience = await realtimeModel.listOrgUserIds(auth.user.org_id);
-        broadcastToUsers(audience, "presence:update", toPresenceEventData(auth.user.id, presence));
+        await broadcastToUsers(audience, "presence:update", toPresenceEventData(auth.user.id, presence));
       }).catch(() => {
         // Ignore presence update failures during socket close.
       });
@@ -625,8 +629,9 @@ function initializeWebSocketServer(server) {
   return websocketServer;
 }
 
-function broadcastToUsers(userIds = [], event, data) {
+async function broadcastToUsers(userIds = [], event, data) {
   const uniqueUserIds = [...new Set((userIds || []).filter(Boolean))];
+  const deliveries = [];
 
   uniqueUserIds.forEach((userId) => {
     const sockets = socketsByUserId.get(userId);
@@ -635,9 +640,11 @@ function broadcastToUsers(userIds = [], event, data) {
     }
 
     sockets.forEach((socket) => {
-      sendEvent(socket, event, data);
+      deliveries.push(sendEvent(socket, event, data));
     });
   });
+
+  await Promise.all(deliveries);
 }
 
 module.exports = {
