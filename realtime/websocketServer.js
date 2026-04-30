@@ -53,6 +53,10 @@ function normalizeOptionalString(value) {
   return normalized || null;
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function normalizeTargetType(value) {
   const normalized = normalizeRequiredString(value, "targetType").toLowerCase();
   if (!SOCKET_TARGET_TYPES.has(normalized)) {
@@ -192,10 +196,22 @@ function sendSocketError(socket, error, requestedEvent = null) {
 }
 
 async function handleSendMessage(socket, payload) {
-  const data = payload || {};
+  if (!isPlainObject(payload)) {
+    throw createError(422, "data is invalid.");
+  }
+
+  const data = payload;
   const targetType = normalizeTargetType(data.targetType);
   const targetId = normalizeRequiredString(data.targetId, "targetId");
   const body = normalizeRequiredString(data.body, "body");
+
+  if (data.attachments !== undefined && !Array.isArray(data.attachments)) {
+    throw createError(422, "attachments is invalid.");
+  }
+
+  if (data.mentions !== undefined && !Array.isArray(data.mentions)) {
+    throw createError(422, "mentions is invalid.");
+  }
 
   const messagePayload = {
     message: {
@@ -213,6 +229,10 @@ async function handleSendMessage(socket, payload) {
   const response = targetType === "channel"
     ? await messagingService.sendChannelMessage(socket.auth.user, targetId, messagePayload)
     : await messagingService.sendConversationMessage(socket.auth.user, targetId, messagePayload);
+
+  if (!response?.message?.id) {
+    throw createError(500, "An unexpected error occurred. Please try again.");
+  }
 
   await recordSocketAudit(socket, "ws.message.send", {
     targetType,

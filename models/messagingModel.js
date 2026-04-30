@@ -1,5 +1,9 @@
 const db = require("../config/db");
 
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 const MESSAGE_BASE_SELECT = `
   SELECT
     m.id,
@@ -514,6 +518,29 @@ async function findMessageById(messageId, client = db, options = {}) {
        ${expiresClause}
      LIMIT 1`,
     [messageId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function findChannelMessageById(channelId, messageId, client = db, options = {}) {
+  const { includeDeleted = false } = options;
+  if (!isNonEmptyString(channelId) || !isNonEmptyString(messageId)) {
+    return null;
+  }
+
+  const deletedClause = includeDeleted ? "" : "AND m.deleted_at IS NULL";
+  const expiresClause = includeDeleted ? "" : "AND (m.expires_at IS NULL OR m.expires_at > NOW())";
+
+  const result = await client.query(
+    `${MESSAGE_BASE_SELECT}
+     WHERE m.id = $1::varchar(64)
+       AND m.target_type = 'channel'
+       AND m.channel_id = $2::varchar(64)
+       ${deletedClause}
+       ${expiresClause}
+     LIMIT 1`,
+    [messageId, channelId]
   );
 
   return result.rows[0] || null;
@@ -1069,6 +1096,7 @@ module.exports = {
   findLatestChannelMessageBySender,
   createMessage,
   findMessageById,
+  findChannelMessageById,
   listMessages,
   listMessagesByIds,
   updateMessage,

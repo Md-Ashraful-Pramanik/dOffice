@@ -1310,11 +1310,11 @@ async function updateMessage(authUser, messageId, payload) {
 
 async function updateChannelMessage(authUser, channelId, messageId, payload) {
   const normalizedChannelId = normalizeRequiredString(channelId, "channelId");
-  const message = await messagingModel.findMessageById(messageId);
+  const normalizedMessageId = normalizeRequiredString(messageId, "messageId");
+  const message = await messagingModel.findChannelMessageById(normalizedChannelId, normalizedMessageId);
   assert(message, "Resource not found.", 404);
-  assert(message.target_type === "channel" && message.channel_id === normalizedChannelId, "Resource not found.", 404);
 
-  return updateMessage(authUser, messageId, payload);
+  return updateMessage(authUser, normalizedMessageId, payload);
 }
 
 async function deleteMessage(authUser, messageId) {
@@ -1371,11 +1371,11 @@ async function deleteMessage(authUser, messageId) {
 
 async function deleteChannelMessage(authUser, channelId, messageId) {
   const normalizedChannelId = normalizeRequiredString(channelId, "channelId");
-  const message = await messagingModel.findMessageById(messageId);
+  const normalizedMessageId = normalizeRequiredString(messageId, "messageId");
+  const message = await messagingModel.findChannelMessageById(normalizedChannelId, normalizedMessageId);
   assert(message, "Resource not found.", 404);
-  assert(message.target_type === "channel" && message.channel_id === normalizedChannelId, "Resource not found.", 404);
 
-  await deleteMessage(authUser, messageId);
+  await deleteMessage(authUser, normalizedMessageId);
 }
 
 async function getMessageEditHistory(authUser, messageId) {
