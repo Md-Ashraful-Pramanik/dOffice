@@ -1,7 +1,7 @@
 const auditService = require("../services/auditService");
 
 function attachAuditLogger(req, res, next) {
-  res.on("finish", async () => {
+  res.once("finish", async () => {
     if (!req.originalUrl.startsWith("/api")) {
       return;
     }
