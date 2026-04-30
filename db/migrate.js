@@ -1389,18 +1389,18 @@ async function runMigrations() {
        VALUES ($1, $2, $3, 'system', TRUE)
        ON CONFLICT (id) DO UPDATE
          SET name = EXCLUDED.name,
-
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_doffice_messages_expires_at
-      ON doffice_messages(expires_at)
-      WHERE deleted_at IS NULL AND expires_at IS NOT NULL;
-    `);
              description = EXCLUDED.description,
              type = 'system',
              is_system = TRUE,
              updated_at = NOW()`,
       ["role_super_admin", "Super Admin", "Global administrator role"]
     );
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_doffice_messages_expires_at
+      ON doffice_messages(expires_at)
+      WHERE deleted_at IS NULL AND expires_at IS NOT NULL;
+    `);
 
     await client.query(
       `INSERT INTO doffice_roles (id, name, description, type, is_system)
